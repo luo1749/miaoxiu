@@ -1,4 +1,4 @@
-﻿# 通用
+# 通用
 .env
 .DS_Store
 *.log
@@ -20,4 +20,5 @@ backend/app/uploads/*
 !backend/app/uploads/.gitkeep
 backend/alembic/versions/*.py
 !backend/alembic/versions/.gitkeep
+
 

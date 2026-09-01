@@ -19,3 +19,9 @@ app/uploads/*
 # 临时 helper 脚本
 _*.py
 
+
+*.bak
+fix_*.py
+
+fix.py
+
