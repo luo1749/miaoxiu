@@ -1,0 +1,21 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv/
+venv/
+ENV/
+env/
+*.db
+*.sqlite3
+.pytest_cache/
+.mypy_cache/
+app/uploads/*
+!app/uploads/.gitkeep
+
+
+# 临时 helper 脚本
+_*.py
+

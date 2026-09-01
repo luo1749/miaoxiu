@@ -1,0 +1,28 @@
+# 混合部署：仅容器化后端与前端，使用宿主机 PostgreSQL + Redis
+# 适用于 Docker Hub 镜像拉取困难的网络环境
+
+services:
+  backend:
+    build: ./backend
+    container_name: miaoxiu-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:522401@host.docker.internal:5432/miaoxiu
+      REDIS_URL: redis://host.docker.internal:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/app/uploads:/app/app/uploads
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./web
+    container_name: miaoxiu-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

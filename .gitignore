@@ -1,0 +1,23 @@
+﻿# 通用
+.env
+.DS_Store
+*.log
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+
+# 后端
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+backend/venv/
+backend/.env
+backend/*.db
+backend/*.sqlite3
+backend/app/uploads/*
+!backend/app/uploads/.gitkeep
+backend/alembic/versions/*.py
+!backend/alembic/versions/.gitkeep
+
