@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # 文件上传
     UPLOAD_DIR: str = "app/uploads"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
 
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]

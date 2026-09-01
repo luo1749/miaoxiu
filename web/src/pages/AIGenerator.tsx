@@ -80,6 +80,7 @@ export default function AIGenerator() {
         colors: selectedColors,
         batch_size: 4,
         mode,
+        image_base64: mode === 'image' ? uploadedImage || undefined : undefined,
       });
       const mapped = generated.map((g: any) => ({
         url: g.image_url,

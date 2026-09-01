@@ -61,6 +61,7 @@ class AIGenerateRequest(BaseModel):
     colors: List[str] = Field(default_factory=lambda: ["indigo", "vermilion"])
     batch_size: int = Field(1, ge=1, le=4)
     mode: str = "text"  # text / image
+    image_base64: str | None = None  # 图生图：上传的图片 base64
 
 
 class CulturalElement(BaseModel):

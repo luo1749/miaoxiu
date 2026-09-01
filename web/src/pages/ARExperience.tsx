@@ -409,7 +409,7 @@ interface ARTryOnProps {
 
 function ARTryOn({ category: initialCategory }: ARTryOnProps) {
   const [selectedPattern, setSelectedPattern] = useState(PATTERNS[0]);
-  const [category, setCategory] = useState<'clothing' | 'home' | 'model'>(initialCategory === 'tryon' ? 'clothing' : initialCategory === 'home' ? 'home' : 'model');
+  const category: 'clothing' | 'home' | 'model' = initialCategory === 'tryon' ? 'clothing' : initialCategory === 'home' ? 'home' : 'model';
   const [showAR, setShowAR] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -472,38 +472,11 @@ function ARTryOn({ category: initialCategory }: ARTryOnProps) {
             </div>
           </div>
 
-          {/* Category + 3D Preview */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div>
-              <label className="text-xs text-[#F0EDE0] opacity-50 mb-3 block font-medium">AR 应用场景</label>
-              <div className="space-y-2">
-                {[
-                  { key: 'clothing' as const, icon: Shirt, label: '服饰试穿', desc: '将纹样以数码印花形式覆盖到T恤、围巾' },
-                  { key: 'home' as const, icon: Home, label: '家居试用', desc: '实时投影到墙面、桌面、抱枕' },
-                  { key: 'model' as const, icon: Camera, label: '虚拟合影', desc: '与穿着苗绣的3D虚拟模特合影' },
-                ].map((c) => (
-                  <button
-                    key={c.key}
-                    onClick={() => setCategory(c.key)}
-                    className="w-full p-4 rounded-xl text-left transition-all flex items-center gap-4"
-                    style={{
-                      backgroundColor: category === c.key ? 'rgba(36,65,169,0.12)' : 'rgba(255,255,255,0.02)',
-                      border: `1px solid ${category === c.key ? '#2441A960' : 'rgba(240,237,224,0.06)'}`,
-                    }}
-                  >
-                    <div className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: category === c.key ? '#2441A920' : 'rgba(255,255,255,0.03)' }}>
-                      <c.icon size={22} style={{ color: category === c.key ? '#2441A9' : 'rgba(240,237,224,0.3)' }} />
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium block" style={{ color: category === c.key ? '#F0EDE0' : 'rgba(240,237,224,0.6)' }}>{c.label}</span>
-                      <span className="text-[11px] text-[#F0EDE0] opacity-40">{c.desc}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 3D Preview */}
+          {/* 3D Preview */}
+          <div>
+            <label className="text-xs text-[#F0EDE0] opacity-50 mb-3 block font-medium">
+              {category === 'clothing' ? '服饰试穿预览' : category === 'home' ? '家居试用预览' : '虚拟合影预览'}
+            </label>
             <div
               className="rounded-xl overflow-hidden relative"
               style={{
@@ -656,6 +629,7 @@ export default function ARExperience() {
     </div>
   );
 }
+
 
 
 

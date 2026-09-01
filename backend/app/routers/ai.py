@@ -1,13 +1,15 @@
-import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app import models, schemas
 from app.deps import get_optional_user
+import base64
+from pathlib import Path
 from app.services.sd_client import generate_images
 from app.services.analyzer import analyze_prompt
 from app.core.redis import get_redis
+from app.core.config import get_settings
 
 router = APIRouter(prefix="/ai", tags=["AI 纹样生成"])
 
@@ -66,14 +68,38 @@ async def generate(
     client_ip = forwarded.split(",")[0].strip() if forwarded else request.client.host
 
     _check_quota(user, client_ip)
+    settings = get_settings()
 
-    # 调用 SD 或降级为模拟图片
+    # 处理上传图片（图生图）
+    image_url: str | None = None
+    if payload.mode == "image" and payload.image_base64:
+        try:
+            header, b64data = payload.image_base64.split(",", 1)
+            image_bytes = base64.b64decode(b64data)
+            upload_path = Path(settings.UPLOAD_DIR)
+            upload_path.mkdir(parents=True, exist_ok=True)
+            temp_name = f"{uuid.uuid4().hex}.png"
+            temp_path = upload_path / temp_name
+            temp_path.write_bytes(image_bytes)
+            image_url = f"/uploads/{temp_name}"
+        except Exception as e:
+            print(f"[AI] 上传图片处理失败: {e}")
+
+    # 调用 Pollinations.ai 或降级为模拟图片
     image_urls = await generate_images(
         prompt=payload.prompt,
         style=payload.style,
         colors=payload.colors,
         batch_size=payload.batch_size,
+        image_url=image_url,
     )
+
+    # 将相对路径补全为可外部访问的绝对 URL
+    public_base = settings.PUBLIC_BASE_URL or f"http://{request.headers.get('host', 'localhost:8000')}"
+    image_urls = [
+        f"{public_base}{url}" if url.startswith('/') else url
+        for url in image_urls
+    ]
 
     # 文化解析
     analysis = analyze_prompt(payload.prompt)

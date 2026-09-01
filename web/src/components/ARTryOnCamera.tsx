@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 
@@ -11,6 +11,8 @@ interface ARTryOnCameraProps {
 export default function ARTryOnCamera({ patternImage, category, onClose }: ARTryOnCameraProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const staticCanvasRef = useRef<HTMLCanvasElement>(null);
+  const staticImageRef = useRef<HTMLImageElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -23,9 +25,10 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
   const [error, setError] = useState('');
   const [detected, setDetected] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  const [useStaticImage, setUseStaticImage] = useState(false);
+  const [staticImageUrl, setStaticImageUrl] = useState<string | null>(null);
 
-  // 关闭资源
-  const cleanup = () => {
+  const cleanup = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = 0;
     if (streamRef.current) {
@@ -42,14 +45,92 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
       rendererRef.current.forceContextLoss();
       rendererRef.current = null;
     }
-  };
+  }, []);
 
+  // 静态图片模式：绘制原图 + 纹样叠加
+  const drawStaticOverlay = useCallback(() => {
+    const canvas = staticCanvasRef.current;
+    const img = staticImageRef.current;
+    const landmarker = landmarkerRef.current;
+    if (!canvas || !img || !landmarker) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+
+    try {
+      const result = landmarker.detect(img);
+      if (result.landmarks && result.landmarks.length > 0) {
+        const lm = result.landmarks[0];
+        const leftShoulder = lm[11];
+        const rightShoulder = lm[12];
+        const leftHip = lm[23];
+        const rightHip = lm[24];
+
+        if (leftShoulder && rightShoulder && leftHip && rightHip) {
+          const sx = leftShoulder.x * canvas.width;
+          const sy = leftShoulder.y * canvas.height;
+          const hx = rightShoulder.x * canvas.width;
+          const hy = rightShoulder.y * canvas.height;
+          const shoulderWidth = Math.hypot(hx - sx, hy - sy);
+          const centerX = (sx + hx) / 2;
+          const centerY = (sy + hy) / 2;
+          const hipY = ((leftHip.y + rightHip.y) / 2) * canvas.height;
+          const torsoHeight = Math.abs(hipY - centerY);
+
+          const pattern = new Image();
+          pattern.src = patternImage;
+          pattern.onload = () => {
+            let w: number, h: number, px: number, py: number;
+            const angle = Math.atan2(hy - sy, hx - sx);
+
+            if (category === 'home') {
+              w = shoulderWidth * 1.2;
+              h = w * 0.6;
+              px = centerX;
+              py = centerY + torsoHeight * 0.15;
+            } else if (category === 'model') {
+              w = shoulderWidth * 0.9;
+              h = w * 1.33;
+              px = centerX + shoulderWidth * 0.8;
+              py = centerY;
+            } else {
+              w = shoulderWidth * 1.55;
+              h = torsoHeight * 2.4;
+              px = centerX;
+              py = centerY + h * 0.08;
+            }
+
+            ctx.save();
+            ctx.translate(px, py);
+            ctx.rotate(angle);
+            ctx.globalAlpha = 0.92;
+            ctx.drawImage(pattern, -w / 2, -h / 2, w, h);
+            ctx.restore();
+            setDetected(true);
+          };
+        }
+      } else {
+        setDetected(false);
+      }
+    } catch {
+      // ignore
+    }
+  }, [patternImage, category]);
+
+  // 初始化 MediaPipe + 摄像头
   useEffect(() => {
+    if (useStaticImage || staticImageUrl) return;
+
     let mounted = true;
 
     async function init() {
       try {
-        // 1. 初始化 MediaPipe（本地文件，避免 CDN 被墙）
         const vision = await FilesetResolver.forVisionTasks('/wasm');
         const landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
@@ -62,7 +143,6 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         if (!mounted) return;
         landmarkerRef.current = landmarker;
 
-        // 2. 获取摄像头
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
@@ -80,7 +160,6 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         }
         videoRef.current.srcObject = stream;
 
-        // 等待视频元数据加载，确保 videoWidth/videoHeight 有效
         await new Promise<void>((resolve, reject) => {
           const video = videoRef.current!;
           if (video.readyState >= 2) {
@@ -103,7 +182,6 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         if (!mounted) return;
         setCameraReady(true);
 
-        // 3. 初始化 Three.js
         const video = videoRef.current;
         const width = video.videoWidth || 1280;
         const height = video.videoHeight || 720;
@@ -130,35 +208,23 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         rendererRef.current = renderer;
 
-        // 灯光
         scene.add(new THREE.AmbientLight(0xffffff, 0.9));
         const dir = new THREE.DirectionalLight(0xffffff, 0.8);
         dir.position.set(0, 0, 5);
         scene.add(dir);
 
-        // 加载纹样贴图
         const textureLoader = new THREE.TextureLoader();
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
-          textureLoader.load(
-            patternImage,
-            (tex) => resolve(tex),
-            undefined,
-            () => reject(new Error('纹样图片加载失败'))
-          );
+          textureLoader.load(patternImage, resolve, undefined, () => reject(new Error('纹样图片加载失败')));
         });
         if (!mounted) return;
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
 
-        // 根据场景创建不同覆盖物
         let geometry: THREE.BufferGeometry;
-        if (category === 'home') {
-          geometry = new THREE.PlaneGeometry(1, 0.6);
-        } else if (category === 'model') {
-          geometry = new THREE.PlaneGeometry(0.9, 1.2);
-        } else {
-          geometry = new THREE.PlaneGeometry(1, 1.2);
-        }
+        if (category === 'home') geometry = new THREE.PlaneGeometry(1, 0.6);
+        else if (category === 'model') geometry = new THREE.PlaneGeometry(0.9, 1.2);
+        else geometry = new THREE.PlaneGeometry(1, 1.2);
 
         const material = new THREE.MeshBasicMaterial({
           map: texture,
@@ -176,9 +242,9 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
       } catch (e: any) {
         const msg = e?.message || String(e);
         if (msg.includes('Permission denied') || msg.includes('NotAllowedError')) {
-          setError('摄像头权限被拒绝，请在浏览器地址栏允许摄像头访问后刷新。');
-        } else if (msg.includes('NotFoundError') || msg.includes('DevicesNotFoundError')) {
-          setError('未检测到摄像头，请连接摄像头后重试。');
+          setError('摄像头权限被拒绝。');
+        } else if (msg.includes('NotFoundError') || msg.includes('Requested device not found') || msg.includes('DevicesNotFoundError')) {
+          setError('未检测到摄像头。');
         } else if (msg.includes('wasm') || msg.includes('model') || msg.includes('landmarker')) {
           setError('AR 模型加载失败，请检查网络或刷新页面重试。');
         } else {
@@ -216,28 +282,23 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
                 const shoulderCenterX = (leftShoulder.x + rightShoulder.x) / 2;
                 const shoulderCenterY = (leftShoulder.y + rightShoulder.y) / 2;
                 const hipCenterY = (leftHip.y + rightHip.y) / 2;
-
                 const aspect = video.videoHeight / video.videoWidth;
                 const x = (shoulderCenterX - 0.5) * 10;
                 const y = -(shoulderCenterY - 0.5) * 10 * aspect;
-
                 const shoulderWidth = Math.abs(leftShoulder.x - rightShoulder.x) * 10;
                 const torsoHeight = Math.abs(shoulderCenterY - hipCenterY) * 10 * aspect;
 
                 if (category === 'home') {
-                  // 抱枕：位于胸前，稍小
                   const scaleX = Math.max(0.6, shoulderWidth * 1.1);
                   const scaleY = scaleX * 0.6;
                   overlay.position.set(x, y - scaleY * 0.2, 0);
                   overlay.scale.set(scaleX, scaleY, 1);
                 } else if (category === 'model') {
-                  // 虚拟合影：纹样立牌，位于身体一侧
                   const scaleX = Math.max(0.5, shoulderWidth * 0.8);
                   const scaleY = scaleX * 1.33;
                   overlay.position.set(x + shoulderWidth * 0.7, y, 0);
                   overlay.scale.set(scaleX, scaleY, 1);
                 } else {
-                  // 服饰试穿：T恤覆盖躯干
                   const scaleX = Math.max(0.8, shoulderWidth * 1.45);
                   const scaleY = Math.max(1.0, torsoHeight * 2.4);
                   overlay.position.set(x, y - scaleY * 0.08, 0);
@@ -250,7 +311,6 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
                 );
                 overlay.rotation.z = -shoulderSlope;
                 overlay.visible = true;
-
                 if (!detected) setDetected(true);
               }
             } else {
@@ -258,15 +318,12 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
               if (detected) setDetected(false);
             }
           } catch {
-            // 忽略单帧检测异常
+            // ignore
           }
-
           renderer.render(scene, camera);
         }
-
         rafRef.current = requestAnimationFrame(detect);
       };
-
       rafRef.current = requestAnimationFrame(detect);
     }
 
@@ -276,14 +333,70 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
       mounted = false;
       cleanup();
     };
-  }, [patternImage, category]);
+  }, [patternImage, category, useStaticImage, staticImageUrl, cleanup]);
+
+  // 静态图片上传后加载 MediaPipe 并绘制
+  useEffect(() => {
+    if (!staticImageUrl) return;
+
+    let mounted = true;
+    setLoading(true);
+
+    async function initStatic() {
+      try {
+        const vision = await FilesetResolver.forVisionTasks('/wasm');
+        const landmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: '/models/pose_landmarker_lite.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'IMAGE',
+          numPoses: 1,
+        });
+        if (!mounted) return;
+        landmarkerRef.current = landmarker;
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = staticImageUrl!;
+        img.onload = () => {
+          if (!mounted) return;
+          staticImageRef.current = img;
+          setLoading(false);
+          drawStaticOverlay();
+        };
+      } catch (e: any) {
+        setError(`静态图片模式初始化失败：${e.message || e}`);
+        setLoading(false);
+      }
+    }
+
+    initStatic();
+
+    return () => {
+      mounted = false;
+      try {
+        landmarkerRef.current?.close();
+      } catch {}
+      landmarkerRef.current = null;
+    };
+  }, [staticImageUrl, drawStaticOverlay]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setStaticImageUrl(url);
+    setUseStaticImage(true);
+    setError('');
+  };
+
+  const title = category === 'home' ? 'AR 家居试用' : category === 'model' ? '虚拟合影' : 'AR 虚拟试穿';
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: '#0B0E14' }}>
       <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'rgba(240,237,224,0.1)' }}>
-        <h2 className="text-[#F0EDE0] font-bold text-sm">
-          {category === 'home' ? 'AR 家居试用' : category === 'model' ? '虚拟合影' : 'AR 虚拟试穿'}
-        </h2>
+        <h2 className="text-[#F0EDE0] font-bold text-sm">{title}</h2>
         <button
           onClick={() => { cleanup(); onClose(); }}
           className="text-[#F0EDE0] opacity-60 hover:opacity-100 px-2 py-1 rounded transition"
@@ -300,34 +413,58 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
             <span className="text-xs mt-2 opacity-60">首次加载模型可能需要 5-10 秒</span>
           </div>
         )}
-        {error && (
+
+        {error && !useStaticImage && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6 z-20">
-            <p className="mb-4" style={{ color: '#E84A3A' }}>{error}</p>
+            <p className="mb-2" style={{ color: '#E84A3A' }}>{error}</p>
+            <p className="text-[#F0EDE0] opacity-50 text-xs mb-4 max-w-md">
+              没有摄像头时，您可以上传一张包含上半身的照片，系统会自动识别并叠加纹样。
+            </p>
+            <label
+              className="px-4 py-2 rounded text-sm font-medium cursor-pointer transition hover:opacity-80"
+              style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
+            >
+              上传照片体验 AR
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+            </label>
             <button
               onClick={() => { cleanup(); onClose(); }}
-              className="px-4 py-2 rounded text-sm font-medium"
-              style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
+              className="mt-3 text-xs text-[#F0EDE0] opacity-50 hover:opacity-80"
             >
               返回
             </button>
           </div>
         )}
 
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 w-full h-full object-cover"
-          style={{ transform: 'scaleX(-1)' }}
-        />
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full object-cover"
-          style={{ transform: 'scaleX(-1)' }}
-        />
+        {!useStaticImage && (
+          <>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+          </>
+        )}
 
-        {cameraReady && !detected && !error && (
+        {useStaticImage && staticImageUrl && (
+          <div className="absolute inset-0 flex items-center justify-center p-4 overflow-auto">
+            <canvas
+              ref={staticCanvasRef}
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              style={{ border: '1px solid rgba(240,237,224,0.1)' }}
+            />
+          </div>
+        )}
+
+        {cameraReady && !detected && !error && !useStaticImage && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-xs z-10" style={{ backgroundColor: 'rgba(11,14,20,0.7)', color: '#F0EDE0' }}>
             请调整姿势，让人体进入画面
           </div>
@@ -335,6 +472,18 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         {detected && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-xs z-10" style={{ backgroundColor: 'rgba(36,65,169,0.85)', color: '#F0EDE0' }}>
             已识别到人体，移动身体即可调整纹样位置
+          </div>
+        )}
+
+        {useStaticImage && (
+          <div className="absolute top-4 right-4 z-10">
+            <label
+              className="px-3 py-2 rounded text-xs font-medium cursor-pointer transition hover:opacity-80"
+              style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
+            >
+              重新上传
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+            </label>
           </div>
         )}
       </div>

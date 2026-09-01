@@ -42,6 +42,7 @@ export const api = {
       colors: string[];
       batch_size: number;
       mode: string;
+      image_base64?: string;
     }) => request<any[]>("/ai/generate", { method: "POST", body: JSON.stringify(payload) }),
     history: () => request<any[]>("/ai/history"),
   },
