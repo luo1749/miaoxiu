@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
 import ARTryOnCamera from '../components/ARTryOnCamera';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Text, Environment } from '@react-three/drei';
+import { Text } from '@react-three/drei';
 import { Group, Mesh, DoubleSide } from 'three';
 import {
   Glasses, Paintbrush, Shirt, Home, Camera,
@@ -403,9 +403,13 @@ function WaxCanvas() {
    AR TRY-ON WITH 3D PREVIEW
    ═══════════════════════════════════════════ */
 
-function ARTryOn() {
+interface ARTryOnProps {
+  category: 'tryon' | 'home' | 'photo';
+}
+
+function ARTryOn({ category: initialCategory }: ARTryOnProps) {
   const [selectedPattern, setSelectedPattern] = useState(PATTERNS[0]);
-  const [category, setCategory] = useState<'clothing' | 'home' | 'model'>('clothing');
+  const [category, setCategory] = useState<'clothing' | 'home' | 'model'>(initialCategory === 'tryon' ? 'clothing' : initialCategory === 'home' ? 'home' : 'model');
   const [showAR, setShowAR] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -522,8 +526,7 @@ function ARTryOn() {
                 <directionalLight position={[5, 5, 5]} intensity={1.2} />
                 <pointLight position={[-3, 2, 4]} intensity={0.6} color="#2441A9" />
                 <pointLight position={[3, -2, 3]} intensity={0.3} color="#E84A3A" />
-                <Environment preset="city" />
-                {scene3D}
+                  {scene3D}
               </Canvas>
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2">
                 <span className="text-[10px] text-[#F0EDE0] opacity-30">Three.js 渲染 · 鼠标交互旋转</span>
@@ -564,7 +567,7 @@ function ARTryOn() {
           </div>
         </>
       ) : (
-        <ARTryOnCamera patternImage={selectedPattern.image} onClose={stopCamera} />
+        <ARTryOnCamera patternImage={selectedPattern.image} category={category} onClose={stopCamera} />
       )}
     </div>
   );
@@ -648,9 +651,11 @@ export default function ARExperience() {
 
         {/* Content */}
         {tab === 'wax' && <WaxCanvas />}
-        {(tab === 'tryon' || tab === 'home' || tab === 'photo') && <ARTryOn />}
+        {(tab === 'tryon' || tab === 'home' || tab === 'photo') && <ARTryOn category={tab} />}
       </div>
     </div>
   );
 }
+
+
 
