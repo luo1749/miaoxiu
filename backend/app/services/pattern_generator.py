@@ -254,20 +254,22 @@ def _pick_colors(style: str, user_colors: List[str]) -> Tuple[str, List[str], st
     bg = COLOR_MAP[bg_color_key]
     bg_lum = _luminance(bg)
 
-    # 前景色：从用户选中中排除背景色，并优先保留与背景对比度高的颜色
+    # 前景色：优先尊重用户选择，再按与背景的对比度排序
     fg_candidates = [c for c in user_colors if c != bg_color_key]
+    # 若用户选色不足 2 个，从风格默认前景色补充
     if len(fg_candidates) < 2:
-        # 补充风格默认前景色，优先选择与背景对比强烈的颜色
         for c in palette["fg"]:
             if c != bg_color_key and c not in fg_candidates:
                 fg_candidates.append(c)
     fg_candidates = fg_candidates[:3]
 
-    # 按与背景的亮度差排序，确保主点缀色对比度最高
+    # 按与背景的亮度差排序，保证主点缀色最醒目
     fg_candidates.sort(key=lambda c: abs(_luminance(COLOR_MAP[c]) - bg_lum), reverse=True)
 
     fg = [COLOR_MAP[c] for c in fg_candidates]
-    accent = fg[0] if fg else COLOR_MAP["vermilion"]
+    # 主点缀色优先使用用户选中的第一个非背景色，确保用户感知到所选颜色
+    user_fg_first = next((c for c in user_colors if c != bg_color_key), None)
+    accent = COLOR_MAP[user_fg_first] if user_fg_first and user_fg_first in COLOR_MAP else (fg[0] if fg else COLOR_MAP["vermilion"])
     return bg, fg, accent
 
 
@@ -340,7 +342,7 @@ def generate_pattern(
             r = rng.randint(2, 6)
             draw.ellipse([x - r, y - r, x + r, y + r], fill=fg[0] if fg else accent)
 
-    # 保存
+    # 保存到 upload 根目录（Docker Desktop Windows 卷挂载子目录权限不稳定）
     upload_path = Path(upload_dir)
     upload_path.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.png"
