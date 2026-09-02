@@ -174,7 +174,35 @@ def seed_data(engine):
             ),
         ]
 
-        session.add_all(patterns + courses + products)
+        # 论坛帖子
+        forum_posts = [
+            models.ForumPost(
+                user_id=admin.id,
+                title="分享一组用AI生成的蝴蝶妈妈系列纹样",
+                content="最近用平台AI生成器创作了一组以蝴蝶妈妈为主题的纹样，融合了传统几何对称与现代抽象风格，效果非常惊艳！",
+                images=[],
+                tags=["AI生成", "蝴蝶妈妈", "创作分享"],
+                status="approved",
+            ),
+            models.ForumPost(
+                user_id=admin.id,
+                title="关于传统蜡染工艺的几点思考",
+                content="作为从事蜡染工艺多年的手艺人，很高兴看到年轻人用新技术让传统纹样焕发新生。AI不是替代，而是让更多人认识我们的文化。",
+                images=[],
+                tags=["传统技艺", "蜡染", "传承"],
+                status="approved",
+            ),
+            models.ForumPost(
+                user_id=user.id,
+                title="AR试穿功能体验分享",
+                content="刚刚体验了AR虚拟试穿，把生成的铜鼓纹图案叠加在照片上，效果很真实。期待后续支持更多纹样和3D模特。",
+                images=[],
+                tags=["AR体验", "铜鼓纹", "虚拟试穿"],
+                status="approved",
+            ),
+        ]
+
+        session.add_all(patterns + courses + products + forum_posts)
         session.commit()
     finally:
         session.close()

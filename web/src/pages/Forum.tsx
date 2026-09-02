@@ -1,52 +1,127 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useI18n } from "../i18n";
-import { useAppStore } from '../store';
-import type { ForumPost } from '../store';
+import { api } from '../api';
+import { useAuth } from '../auth';
 import {
   MessageSquare, Heart, Send,
   MessageCircle, Share2, Bookmark,
-  X,
+  X, Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const TAGS = ['全部', 'AI生成', '传统技艺', 'AR体验', '创作分享', '研学日记', '求助问答', '活动招募'];
 
+interface BackendPost {
+  id: string;
+  title: string;
+  content: string;
+  images: string[];
+  tags: string[];
+  likes: number;
+  comments_count: number;
+  status: string;
+  created_at: string;
+  author?: {
+    name: string;
+    avatar: string;
+  } | null;
+}
+
+interface ForumPost extends BackendPost {
+  liked: boolean;
+}
+
 export default function Forum() {
   const { t } = useI18n();
-  const { forumPosts, toggleForumLike, addForumPost } = useAppStore();
+  const { isLoggedIn } = useAuth();
+  const [posts, setPosts] = useState<ForumPost[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeTag, setActiveTag] = useState('全部');
   const [showNewPost, setShowNewPost] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const [newTags, setNewTags] = useState('');
 
-  const filteredPosts = activeTag === '全部'
-    ? forumPosts
-    : forumPosts.filter((p) => p.tags.includes(activeTag));
-
-  const handleSubmit = () => {
-    if (!newTitle.trim() || !newContent.trim()) return;
-    const post: ForumPost = {
-      id: Date.now().toString(),
-      author: '创意探索者',
-      avatar: 'images/pattern-5.jpg',
-      title: newTitle,
-      content: newContent,
-      images: [],
-      likes: 0,
-      comments: 0,
-      tags: newTags.split(/[,，]/).filter(Boolean).length > 0 ? newTags.split(/[,，]/) : ['创作分享'],
-      timestamp: Date.now(),
-      liked: false,
-    };
-    addForumPost(post);
-    setNewTitle('');
-    setNewContent('');
-    setNewTags('');
-    setShowNewPost(false);
+  const fetchPosts = async () => {
+    setLoading(true);
+    try {
+      const data = await api.forum.posts({ status: 'approved' });
+      setPosts(
+        (data || []).map((p: BackendPost) => ({
+          ...p,
+          liked: false,
+        }))
+      );
+    } catch (e: any) {
+      toast.error(e.message || '帖子加载失败');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const timeAgo = (ts: number) => {
-    const diff = Date.now() - ts;
+  useEffect(() => {
+    fetchPosts();
+  }, []);
+
+  const filteredPosts = activeTag === '全部'
+    ? posts
+    : posts.filter((p) => p.tags.includes(activeTag));
+
+  const handleSubmit = async () => {
+    if (!isLoggedIn) {
+      toast.error('请先登录后发帖');
+      return;
+    }
+    if (!newTitle.trim() || !newContent.trim()) return;
+    setSubmitting(true);
+    try {
+      const tags = newTags.split(/[,，]/).filter(Boolean).length > 0
+        ? newTags.split(/[,，]/).map((t) => t.trim()).filter(Boolean)
+        : ['创作分享'];
+      await api.forum.createPost({
+        title: newTitle.trim(),
+        content: newContent.trim(),
+        tags,
+        images: [],
+      });
+      toast.success('发帖成功，审核通过后将显示');
+      setNewTitle('');
+      setNewContent('');
+      setNewTags('');
+      setShowNewPost(false);
+      fetchPosts();
+    } catch (e: any) {
+      toast.error(e.message || '发帖失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleLike = async (post: ForumPost, index: number) => {
+    if (!isLoggedIn) {
+      toast.error('请先登录后点赞');
+      return;
+    }
+    try {
+      await api.forum.like(post.id);
+      setPosts((prev) =>
+        prev.map((p, i) => {
+          if (i !== index) return p;
+          return {
+            ...p,
+            liked: !p.liked,
+            likes: p.liked ? p.likes - 1 : p.likes + 1,
+          };
+        })
+      );
+    } catch (e: any) {
+      toast.error(e.message || '点赞失败');
+    }
+  };
+
+  const timeAgo = (ts: string) => {
+    const diff = Date.now() - new Date(ts).getTime();
     if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
     if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
     return Math.floor(diff / 86400000) + '天前';
@@ -72,7 +147,13 @@ export default function Forum() {
             </p>
           </div>
           <button
-            onClick={() => setShowNewPost(true)}
+            onClick={() => {
+              if (!isLoggedIn) {
+                toast.error('请先登录后发帖');
+                return;
+              }
+              setShowNewPost(true);
+            }}
             className="px-5 py-3 rounded-lg text-sm font-bold flex items-center gap-2"
             style={{ backgroundColor: '#E84A3A', color: '#F0EDE0' }}
           >
@@ -100,66 +181,82 @@ export default function Forum() {
         </div>
 
         {/* Posts */}
-        <div className="space-y-4">
-          {filteredPosts.map((post) => (
-            <div
-              key={post.id}
-              className="p-5 rounded-xl"
-              style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(240,237,224,0.06)' }}
-            >
-              <div className="flex items-start gap-3">
-                <img src={post.avatar} alt={post.author} className="w-10 h-10 rounded-full object-cover shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[#F0EDE0] font-medium text-sm">{post.author}</span>
-                    <span className="text-[10px] text-[#F0EDE0] opacity-30">{timeAgo(post.timestamp)}</span>
-                  </div>
-                  <h3 className="text-[#F0EDE0] font-bold text-base mb-2">{post.title}</h3>
-                  <p className="serif-text text-[#F0EDE0] opacity-50 text-sm leading-relaxed mb-3">{post.content}</p>
+        {loading ? (
+          <div className="text-center py-20 text-[#F0EDE0] opacity-50">
+            <Loader2 size={32} className="animate-spin mx-auto mb-4" />
+            加载中...
+          </div>
+        ) : filteredPosts.length === 0 ? (
+          <div className="text-center py-20 rounded-xl" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(240,237,224,0.06)' }}>
+            <MessageSquare size={48} className="mx-auto mb-4 opacity-20" style={{ color: '#F0EDE0' }} />
+            <p className="text-[#F0EDE0] opacity-50">暂无帖子，快来发布第一条吧</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredPosts.map((post, idx) => (
+              <div
+                key={post.id}
+                className="p-5 rounded-xl"
+                style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(240,237,224,0.06)' }}
+              >
+                <div className="flex items-start gap-3">
+                  <img
+                    src={post.author?.avatar || 'images/pattern-1.jpg'}
+                    alt={post.author?.name || '用户'}
+                    className="w-10 h-10 rounded-full object-cover shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[#F0EDE0] font-medium text-sm">{post.author?.name || '匿名用户'}</span>
+                      <span className="text-[10px] text-[#F0EDE0] opacity-30">{timeAgo(post.created_at)}</span>
+                    </div>
+                    <h3 className="text-[#F0EDE0] font-bold text-base mb-2">{post.title}</h3>
+                    <p className="serif-text text-[#F0EDE0] opacity-50 text-sm leading-relaxed mb-3">{post.content}</p>
 
-                  {post.images.length > 0 && (
-                    <div className="flex gap-2 mb-3">
-                      {post.images.map((img, i) => (
-                        <img key={i} src={img} alt="" className="w-24 h-24 rounded-lg object-cover" />
+                    {post.images.length > 0 && (
+                      <div className="flex gap-2 mb-3">
+                        {post.images.map((img, i) => (
+                          <img key={i} src={img} alt="" className="w-24 h-24 rounded-lg object-cover" />
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 mb-3">
+                      {post.tags.map((t) => (
+                        <span key={t} className="text-[10px] px-2 py-0.5 rounded-full" style={{ backgroundColor: 'rgba(36,65,169,0.15)', color: '#2441A9' }}>
+                          {t}
+                        </span>
                       ))}
                     </div>
-                  )}
 
-                  <div className="flex items-center gap-1 mb-3">
-                    {post.tags.map((t) => (
-                      <span key={t} className="text-[10px] px-2 py-0.5 rounded-full" style={{ backgroundColor: 'rgba(36,65,169,0.15)', color: '#2441A9' }}>
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <button
-                      onClick={() => toggleForumLike(post.id)}
-                      className="flex items-center gap-1 text-xs transition-all"
-                      style={{ color: post.liked ? '#E84A3A' : 'rgba(240,237,224,0.4)' }}
-                    >
-                      <Heart size={14} fill={post.liked ? '#E84A3A' : 'none'} />
-                      {post.likes}
-                    </button>
-                    <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
-                      <MessageCircle size={14} />
-                      {post.comments}
-                    </button>
-                    <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
-                      <Share2 size={14} />
-                      分享
-                    </button>
-                    <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
-                      <Bookmark size={14} />
-                      收藏
-                    </button>
+                    <div className="flex items-center gap-4">
+                      <button
+                        onClick={() => handleLike(post, idx)}
+                        className="flex items-center gap-1 text-xs transition-all"
+                        style={{ color: post.liked ? '#E84A3A' : 'rgba(240,237,224,0.4)' }}
+                      >
+                        <Heart size={14} fill={post.liked ? '#E84A3A' : 'none'} />
+                        {post.likes}
+                      </button>
+                      <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
+                        <MessageCircle size={14} />
+                        {post.comments_count}
+                      </button>
+                      <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
+                        <Share2 size={14} />
+                        分享
+                      </button>
+                      <button className="flex items-center gap-1 text-xs" style={{ color: 'rgba(240,237,224,0.4)' }}>
+                        <Bookmark size={14} />
+                        收藏
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* New Post Modal */}
         {showNewPost && (
@@ -196,10 +293,11 @@ export default function Forum() {
                 />
                 <button
                   onClick={handleSubmit}
-                  className="w-full py-3 rounded-lg text-sm font-bold"
-                  style={{ backgroundColor: '#E84A3A', color: '#F0EDE0' }}
+                  disabled={submitting}
+                  className="w-full py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#E84A3A', color: '#F0EDE0', opacity: submitting ? 0.7 : 1 }}
                 >
-                  <Send size={14} className="inline mr-2" />
+                  {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                   {t("forum.submit")}
                 </button>
               </div>
@@ -210,3 +308,4 @@ export default function Forum() {
     </div>
   );
 }
+

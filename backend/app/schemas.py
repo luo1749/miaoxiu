@@ -1,6 +1,6 @@
-﻿from datetime import datetime
+from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 from uuid import UUID
 from app.models import UserRole, PatternCategory, OrderStatus
 
@@ -141,7 +141,12 @@ class ForumPostOut(BaseModel):
     is_featured: bool
     status: str
     created_at: datetime
-    author: Optional[UserOut] = None
+    user: Optional[UserOut] = None
+
+    @computed_field
+    @property
+    def author(self) -> Optional[UserOut]:
+        return self.user
 
     class Config:
         from_attributes = True
@@ -155,7 +160,12 @@ class ForumCommentOut(BaseModel):
     id: UUID
     content: str
     created_at: datetime
-    author: Optional[UserOut] = None
+    user: Optional[UserOut] = None
+
+    @computed_field
+    @property
+    def author(self) -> Optional[UserOut]:
+        return self.user
 
     class Config:
         from_attributes = True
@@ -272,4 +282,5 @@ class DashboardStats(BaseModel):
     total_products: int
     today_generated: int
     pending_posts: int
+
 
