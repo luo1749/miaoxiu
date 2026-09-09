@@ -6,6 +6,7 @@ from typing import List
 from uuid import UUID
 from app.database import get_db
 from app import models, schemas
+from uuid import UUID
 from app.deps import require_admin
 
 router = APIRouter(prefix="/admin", tags=["后台管理"])
@@ -97,3 +98,37 @@ def list_logs(
         .all()
     )
 
+
+
+@router.get("/orders")
+def list_all_orders(
+    skip: int = 0,
+    limit: int = 50,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """管理员查看所有订单"""
+    return (
+        db.query(models.Order)
+        .order_by(models.Order.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+@router.put("/orders/{order_id}/status")
+def update_order_status(
+    order_id: UUID,
+    status: models.OrderStatus,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """管理员修改订单状态"""
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    order.status = status
+    db.commit()
+    db.refresh(order)
+    return order

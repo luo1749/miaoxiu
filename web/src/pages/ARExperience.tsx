@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useMemo } from 'react';
 import ARTryOnCamera from '../components/ARTryOnCamera';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
-import { Group, Mesh, DoubleSide } from 'three';
+import * as THREE from 'three';
 import {
   Glasses, Paintbrush, Shirt, Home, Camera,
   Eraser, Download, Sparkles,
@@ -25,9 +25,17 @@ const PATTERNS = [
    3D AR PREVIEW — Three.js Components
    ═══════════════════════════════════════════ */
 
-function AR3DClothing() {
-  const groupRef = useRef<Group>(null);
-  const meshRef = useRef<Mesh>(null);
+function AR3DClothing({ patternImage }: { patternImage: string }) {
+  const texture = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    const tex = loader.load(patternImage);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+  }, [patternImage]);
+  const groupRef = useRef<THREE.Group>(null);
+  const meshRef = useRef<THREE.Mesh>(null);
 
   useFrame((state) => {
     if (!groupRef.current) return;
@@ -52,13 +60,12 @@ function AR3DClothing() {
       {/* Pattern overlay on chest */}
       <mesh position={[0, 0.1, 0.08]}>
         <planeGeometry args={[0.8, 0.8]} />
-        <meshBasicMaterial
-          side={DoubleSide}
+        <meshStandardMaterial
+          map={texture}
+          side={THREE.DoubleSide}
           transparent
-          opacity={0.85}
-        >
-          {/* We use a texture-like color approach */}
-        </meshBasicMaterial>
+          opacity={0.92}
+        />
       </mesh>
       {/* Sleeves */}
       <mesh position={[-0.7, 0.5, 0]} rotation={[0, 0, -0.3]}>
@@ -86,7 +93,7 @@ function AR3DClothing() {
 }
 
 function ARDecorativeRing() {
-  const ringRef = useRef<Group>(null);
+  const ringRef = useRef<THREE.Group>(null);
 
   useFrame((state) => {
     if (!ringRef.current) return;
@@ -111,8 +118,16 @@ function ARDecorativeRing() {
   );
 }
 
-function AR3DHome() {
-  const groupRef = useRef<Group>(null);
+function AR3DHome({ patternImage }: { patternImage: string }) {
+  const texture = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    const tex = loader.load(patternImage);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+  }, [patternImage]);
+  const groupRef = useRef<THREE.Group>(null);
 
   useFrame((state) => {
     if (!groupRef.current) return;
@@ -135,11 +150,11 @@ function AR3DHome() {
       {/* Pattern on pillow surface */}
       <mesh position={[0, 0.21, 0]}>
         <planeGeometry args={[1.0, 0.6]} />
-        <meshPhysicalMaterial
-          color="#2441A9"
+        <meshStandardMaterial
+          map={texture}
+          side={THREE.DoubleSide}
           transparent
-          opacity={0.6}
-          roughness={0.2}
+          opacity={0.95}
         />
       </mesh>
       {/* Floating decorative elements */}
@@ -163,8 +178,16 @@ function AR3DHome() {
   );
 }
 
-function AR3DModel() {
-  const groupRef = useRef<Group>(null);
+function AR3DModel({ patternImage }: { patternImage: string }) {
+  const texture = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    const tex = loader.load(patternImage);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+  }, [patternImage]);
+  const groupRef = useRef<THREE.Group>(null);
 
   useFrame((state) => {
     if (!groupRef.current) return;
@@ -187,7 +210,12 @@ function AR3DModel() {
       {/* Pattern on chest */}
       <mesh position={[0, -0.1, 0.26]}>
         <planeGeometry args={[0.35, 0.35]} />
-        <meshPhysicalMaterial color="#E84A3A" transparent opacity={0.7} roughness={0.2} />
+        <meshStandardMaterial
+          map={texture}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={0.9}
+        />
       </mesh>
       {/* Arms */}
       <mesh position={[-0.45, -0.1, 0]} rotation={[0, 0, 0.2]}>
@@ -433,11 +461,11 @@ function ARTryOn({ category: initialCategory }: ARTryOnProps) {
 
   const scene3D = useMemo(() => {
     switch (category) {
-      case 'clothing': return <AR3DClothing />;
-      case 'home': return <AR3DHome />;
-      case 'model': return <AR3DModel />;
+      case 'clothing': return <AR3DClothing patternImage={selectedPattern.image} />;
+      case 'home': return <AR3DHome patternImage={selectedPattern.image} />;
+      case 'model': return <AR3DModel patternImage={selectedPattern.image} />;
     }
-  }, [category]);
+  }, [category, selectedPattern]);
 
   return (
     <div className="space-y-6">

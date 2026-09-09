@@ -25,6 +25,7 @@ class UserRegister(UserBase):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    remember: bool = False
 
 
 class UserOut(BaseModel):
@@ -213,6 +214,12 @@ class CourseProgressOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CourseProgressSimpleOut(BaseModel):
+    progress: float
+    is_completed: bool
+    updated_at: datetime | None = None
 
 
 # ================== 商品 / 订单 ==================

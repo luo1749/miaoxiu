@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useI18n } from '../i18n';
 import { api } from '../api';
-import { useAppStore } from '../store';
+import { useAppStore, type CartItem } from '../store';
+import { useAuth } from '../auth';
 import { ShoppingBag, Plus, Search, Tag } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -22,7 +23,8 @@ const CATEGORIES = ['全部', '服饰', '箱包', '饰品'];
 
 export default function Shop() {
   const { t } = useI18n();
-  const { addToCart } = useAppStore();
+  const { addToCart, setCart } = useAppStore();
+  const { isLoggedIn } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState('全部');
@@ -41,15 +43,36 @@ export default function Shop() {
     return matchCat && matchSearch;
   });
 
-  const handleAdd = (p: Product) => {
-    addToCart({
+  const handleAdd = async (p: Product) => {
+    const item: CartItem = {
       id: p.id,
+      productId: p.id,
       name: p.name,
       price: p.price,
       image: p.image_url,
       quantity: 1,
       type: 'handmade',
-    });
+    };
+    if (isLoggedIn) {
+      try {
+        await api.cart.add({ product_id: p.id, quantity: 1 });
+        const items = await api.cart.list();
+        setCart(items.map((it: any) => ({
+          id: it.id,
+          productId: it.product?.id ?? it.id,
+          name: it.product?.name ?? p.name,
+          price: it.product?.price ?? p.price,
+          image: it.product?.image_url ?? p.image_url,
+          quantity: it.quantity,
+          type: 'handmade' as const,
+        })));
+      } catch (e: any) {
+        toast.error(e.message || '加入购物车失败');
+        return;
+      }
+    } else {
+      addToCart(item);
+    }
     toast.success(`已将「${p.name}」加入购物车`);
   };
 

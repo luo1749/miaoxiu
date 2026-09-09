@@ -1,5 +1,7 @@
 // Simple global state management using React Context
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { api } from './api';
+import { useAuth } from './auth';
 
 export interface GeneratedImage {
   id: string;
@@ -15,6 +17,7 @@ export interface GeneratedImage {
 
 export interface CartItem {
   id: string;
+  productId: string;
   name: string;
   price: number;
   image: string;
@@ -51,22 +54,25 @@ interface AppState {
   generatedImages: GeneratedImage[];
   addGeneratedImage: (img: GeneratedImage) => void;
   toggleLike: (id: string) => void;
-  
+
   // Cart
   cart: CartItem[];
+  setCart: (items: CartItem[]) => void;
   addToCart: (item: CartItem) => void;
   removeFromCart: (id: string) => void;
-  
+  updateQuantity: (id: string, quantity: number) => void;
+  clearCart: () => void;
+
   // Forum
   forumPosts: ForumPost[];
   addForumPost: (post: ForumPost) => void;
   toggleForumLike: (id: string) => void;
-  
+
   // User
   user: UserProfile;
   saveImage: (img: GeneratedImage) => void;
   unsaveImage: (id: string) => void;
-  
+
   // Admin
   isAdmin: boolean;
 }
@@ -123,14 +129,77 @@ const defaultPosts: ForumPost[] = [
   },
 ];
 
+const CART_STORAGE_KEY = 'miaoxiu-cart';
+
+function mapServerCartItem(item: any): CartItem {
+  return {
+    id: item.id,
+    productId: item.product?.id ?? item.id,
+    name: item.product?.name ?? '商品',
+    price: item.product?.price ?? 0,
+    image: item.product?.image_url ?? '',
+    quantity: item.quantity,
+    type: 'handmade',
+  };
+}
+
 const AppContext = createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const { isLoggedIn } = useAuth();
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem(CART_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
   const [forumPosts, setForumPosts] = useState<ForumPost[]>(defaultPosts);
   const [user, setUser] = useState<UserProfile>(defaultUser);
-  const isAdmin = true; // For demo purposes
+  const [hasSyncedCart, setHasSyncedCart] = useState(false);
+  const isAdmin = true;
+
+  // 游客购物车持久化到 localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+    } catch {}
+  }, [cart]);
+
+  // 登录后将本地购物车合并到后端，然后拉取服务端购物车
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setHasSyncedCart(false);
+      return;
+    }
+    if (hasSyncedCart) return;
+    setHasSyncedCart(true);
+    (async () => {
+      try {
+        const raw = localStorage.getItem(CART_STORAGE_KEY);
+        const localItems: CartItem[] = raw ? JSON.parse(raw) : [];
+        const serverItems = await api.cart.list();
+        const serverProductIds = new Set(serverItems.map((item) => item.product?.id ?? item.id));
+        const toMerge = localItems.filter((item) => !serverProductIds.has(item.productId || item.id));
+        if (toMerge.length > 0) {
+          await Promise.allSettled(
+            toMerge.map((item) =>
+              api.cart.add({ product_id: item.productId || item.id, quantity: item.quantity })
+            )
+          );
+        }
+        const freshServerItems = await api.cart.list();
+        setCart(freshServerItems.map(mapServerCartItem));
+        localStorage.removeItem(CART_STORAGE_KEY);
+      } catch (e) {
+        console.error('购物车同步失败', e);
+      }
+    })();
+  }, [isLoggedIn, hasSyncedCart]);
 
   const addGeneratedImage = useCallback((img: GeneratedImage) => {
     setGeneratedImages((prev) => [img, ...prev]);
@@ -150,9 +219,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const addToCart = useCallback((item: CartItem) => {
     setCart((prev) => {
-      const existing = prev.find((i) => i.id === item.id);
+      const existing = prev.find((i) => i.productId === item.productId);
       if (existing) {
-        return prev.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
+        return prev.map((i) =>
+          i.productId === item.productId ? { ...i, quantity: i.quantity + item.quantity } : i
+        );
       }
       return [...prev, item];
     });
@@ -160,6 +231,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const removeFromCart = useCallback((id: string) => {
     setCart((prev) => prev.filter((i) => i.id !== id));
+  }, []);
+
+  const updateQuantity = useCallback((id: string, quantity: number) => {
+    setCart((prev) => {
+      if (quantity <= 0) return prev.filter((i) => i.id !== id);
+      return prev.map((i) => (i.id === id ? { ...i, quantity } : i));
+    });
+  }, []);
+
+  const clearCart = useCallback(() => {
+    setCart([]);
   }, []);
 
   const addForumPost = useCallback((post: ForumPost) => {
@@ -193,8 +275,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addGeneratedImage,
         toggleLike,
         cart,
+        setCart,
         addToCart,
         removeFromCart,
+        updateQuantity,
+        clearCart,
         forumPosts,
         addForumPost,
         toggleForumLike,

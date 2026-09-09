@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from app.database import get_db
 from app import models, schemas
 from app.deps import get_optional_user
 import base64
+import uuid
 from pathlib import Path
 from app.services.sd_client import generate_images
 from app.services.analyzer import analyze_prompt
@@ -14,23 +17,40 @@ from app.core.config import get_settings
 router = APIRouter(prefix="/ai", tags=["AI 纹样生成"])
 
 GUEST_DAILY_LIMIT = 3
-USER_DAILY_LIMIT = 20
+
+
+def _today_str() -> str:
+    """按北京时间返回当日日期字符串"""
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+
+def _seconds_until_midnight() -> int:
+    """距离北京时间次日零点的秒数"""
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int((midnight - now).total_seconds())
+
+
+def _user_quota_key(user_id) -> str:
+    """登录用户 AI 额度 Redis 键（按日）"""
+    return f"user:{user_id}:ai_count:{_today_str()}"
 
 
 def _guest_quota_key(ip: str) -> str:
-    """游客 AI 生成额度 Redis 键"""
-    return f"guest:{ip}:ai_count"
+    """游客 AI 生成额度 Redis 键（按日）"""
+    return f"guest:{ip}:ai_count:{_today_str()}"
 
 
 def _check_quota(user: models.User | None, ip: str) -> None:
-    """检查用户 AI 生成额度"""
+    """检查用户/游客今日 AI 生成额度"""
+    r = get_redis()
     if user is not None:
-        if user.ai_quota_used >= user.ai_quota_daily:
+        used = int(r.get(_user_quota_key(user.id)) or 0) if r else user.ai_quota_used
+        if used >= user.ai_quota_daily:
             raise HTTPException(status_code=429, detail="今日 AI 生成额度已用完，请明日再来")
         return
 
-    # 游客基于 IP 限流，24 小时内最多 3 次
-    r = get_redis()
+    # 游客基于 IP 按日限流
     if r is None:
         return
     count = r.get(_guest_quota_key(ip))
@@ -39,19 +59,25 @@ def _check_quota(user: models.User | None, ip: str) -> None:
 
 
 def _consume_quota(user: models.User | None, db: Session, ip: str) -> None:
-    """消耗一次额度"""
+    """消耗一次额度（按日重置）"""
+    r = get_redis()
     if user is not None:
-        user.ai_quota_used += 1
+        key = _user_quota_key(user.id)
+        if r:
+            count = r.incr(key)
+            r.expire(key, _seconds_until_midnight())
+        else:
+            count = user.ai_quota_used + 1
+        user.ai_quota_used = int(count)
         db.commit()
         return
 
-    r = get_redis()
     if r is None:
         return
     key = _guest_quota_key(ip)
     pipe = r.pipeline()
     pipe.incr(key)
-    pipe.expire(key, 24 * 60 * 60)
+    pipe.expire(key, _seconds_until_midnight())
     pipe.execute()
 
 

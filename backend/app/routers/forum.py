@@ -14,6 +14,7 @@ def list_posts(
     status: Optional[str] = "approved",
     tag: Optional[str] = None,
     search: Optional[str] = None,
+    user_id: Optional[str] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -22,6 +23,8 @@ def list_posts(
     query = db.query(models.ForumPost)
     if status:
         query = query.filter(models.ForumPost.status == status)
+    if user_id:
+        query = query.filter(models.ForumPost.user_id == user_id)
     if tag:
         query = query.filter(models.ForumPost.tags.contains([tag]))
     if search:

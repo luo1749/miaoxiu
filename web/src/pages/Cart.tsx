@@ -1,32 +1,72 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useI18n } from '../i18n';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { useAppStore } from '../store';
+import { useAppStore, type CartItem } from '../store';
 import { ShoppingCart, Trash2, Plus, Minus, CreditCard, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
+
+function mapServerCartItem(item: any): CartItem {
+  return {
+    id: item.id,
+    productId: item.product?.id ?? item.id,
+    name: item.product?.name ?? '商品',
+    price: item.product?.price ?? 0,
+    image: item.product?.image_url ?? '',
+    quantity: item.quantity,
+    type: 'handmade',
+  };
+}
 
 export default function Cart() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { isLoggedIn } = useAuth();
-  const { cart, removeFromCart, addToCart } = useAppStore();
+  const { cart, removeFromCart, updateQuantity, setCart, clearCart } = useAppStore();
   const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(isLoggedIn);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    api.cart
+      .list()
+      .then((items) => setCart(items.map(mapServerCartItem)))
+      .catch(() => toast.error('购物车加载失败'))
+      .finally(() => setLoading(false));
+  }, [isLoggedIn, setCart]);
 
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const updateQty = (id: string, delta: number) => {
-    const item = cart.find((i) => i.id === id);
-    if (!item) return;
+  const updateQty = async (item: CartItem, delta: number) => {
     const newQty = item.quantity + delta;
     if (newQty <= 0) {
-      removeFromCart(id);
+      if (isLoggedIn) {
+        try { await api.cart.remove(item.id); } catch {}
+      }
+      removeFromCart(item.id);
     } else {
-      // 通过 remove + add 间接更新数量
-      removeFromCart(id);
-      addToCart({ ...item, quantity: newQty });
+      if (isLoggedIn) {
+        try {
+          await api.cart.update(item.id, newQty);
+        } catch (e: any) {
+          toast.error(e.message || '更新数量失败');
+          return;
+        }
+      }
+      updateQuantity(item.id, newQty);
     }
+  };
+
+  const handleRemove = async (id: string) => {
+    if (isLoggedIn) {
+      try { await api.cart.remove(id); } catch {}
+    }
+    removeFromCart(id);
   };
 
   const handleCheckout = async () => {
@@ -38,9 +78,9 @@ export default function Cart() {
     }
     setSubmitting(true);
     try {
-      const items = cart.map((i) => ({ product_id: i.id, quantity: i.quantity }));
+      const items = cart.map((i) => ({ product_id: i.productId, quantity: i.quantity }));
       await api.orders.create(items);
-      cart.forEach((i) => removeFromCart(i.id));
+      clearCart();
       toast.success('订单创建成功，即将跳转');
       navigate('/orders');
     } catch (e: any) {
@@ -64,7 +104,9 @@ export default function Cart() {
           </h1>
         </div>
 
-        {cart.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-20 text-[#F0EDE0] opacity-50">加载中...</div>
+        ) : cart.length === 0 ? (
           <div className="text-center py-20 rounded-2xl" style={{ border: '1px solid rgba(240,237,224,0.08)' }}>
             <ShoppingCart size={48} className="mx-auto mb-4 opacity-20" style={{ color: '#F0EDE0' }} />
             <p className="text-[#F0EDE0] opacity-50 mb-6">购物车还是空的</p>
@@ -90,18 +132,18 @@ export default function Cart() {
                     <h3 className="text-[#F0EDE0] font-bold text-sm truncate">{item.name}</h3>
                     <p className="text-xs opacity-50 mt-1" style={{ color: '#F0EDE0' }}>单价 ¥{item.price}</p>
                     <div className="flex items-center gap-3 mt-3">
-                      <button onClick={() => updateQty(item.id, -1)} className="p-1 rounded hover:bg-white/5" style={{ color: '#F0EDE0' }}>
+                      <button onClick={() => updateQty(item, -1)} className="p-1 rounded hover:bg-white/5" style={{ color: '#F0EDE0' }}>
                         <Minus size={14} />
                       </button>
                       <span className="text-sm text-[#F0EDE0] w-6 text-center">{item.quantity}</span>
-                      <button onClick={() => updateQty(item.id, 1)} className="p-1 rounded hover:bg-white/5" style={{ color: '#F0EDE0' }}>
+                      <button onClick={() => updateQty(item, 1)} className="p-1 rounded hover:bg-white/5" style={{ color: '#F0EDE0' }}>
                         <Plus size={14} />
                       </button>
                     </div>
                   </div>
                   <div className="flex flex-col items-end justify-between">
                     <span className="font-bold text-[#F0EDE0]">¥{(item.price * item.quantity).toFixed(2)}</span>
-                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#E84A3A' }}>
+                    <button onClick={() => handleRemove(item.id)} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#E84A3A' }}>
                       <Trash2 size={16} />
                     </button>
                   </div>

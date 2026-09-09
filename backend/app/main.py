@@ -8,7 +8,7 @@ from app.core.config import get_settings
 from app.database import engine
 from app import models
 from app.routers import (
-    auth, ai, patterns, forum, courses, products, orders, users, admin
+    auth, ai, patterns, forum, courses, products, orders, users, admin, uploads
 )
 
 settings = get_settings()
@@ -55,6 +55,7 @@ app.include_router(products.router, prefix="/api/v1")
 app.include_router(orders.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(uploads.router, prefix="/api/v1")
 
 
 @app.get("/health")

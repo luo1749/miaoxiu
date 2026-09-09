@@ -20,7 +20,8 @@ interface AuthState {
   isLoggedIn: boolean;
   isLoading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string, remember?: boolean) => Promise<boolean>;
+  setAuthFromToken: (token: string) => Promise<boolean>;
   register: (name: string, email: string, password: string, role?: UserRole) => Promise<boolean>;
   logout: () => void;
   hasPermission: (minRole: UserRole) => boolean;
@@ -107,11 +108,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const login = useCallback(async (email: string, password: string): Promise<boolean> => {
+  const login = useCallback(async (email: string, password: string, remember: boolean = false): Promise<boolean> => {
     setError(null);
     // 优先走后端认证
     try {
-      const data = await api.auth.login(email, password);
+      const data = await api.auth.login(email, password, remember);
       const authUser = backendUserToAuthUser(data.user);
       setToken(data.access_token);
       setUser(authUser);
@@ -193,13 +194,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user]
   );
 
-  const updateProfile = useCallback((data: Partial<AuthUser>) => {
+  const updateProfile = useCallback(async (data: Partial<AuthUser>) => {
     setUser((prev) => {
       if (!prev) return null;
       const updated = { ...prev, ...data };
       localStorage.setItem("miaoxiu-user", JSON.stringify(updated));
       return updated;
     });
+    // 同步到后端
+    try {
+      await api.auth.updateMe(data);
+    } catch {
+      // 忽略后端同步失败，本地已更新
+    }
+  }, []);
+
+  const setAuthFromToken = useCallback(async (token: string): Promise<boolean> => {
+    setToken(token);
+    try {
+      const u = await api.auth.me();
+      const authUser = backendUserToAuthUser(u);
+      setUser(authUser);
+      localStorage.setItem("miaoxiu-user", JSON.stringify(authUser));
+      return true;
+    } catch (e) {
+      removeToken();
+      setError(e instanceof Error ? e.message : "登录失败");
+      return false;
+    }
   }, []);
 
   return (
@@ -214,6 +236,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         hasPermission,
         updateProfile,
+        setAuthFromToken,
       }}
     >
       {children}

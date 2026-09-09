@@ -1,7 +1,7 @@
 ﻿import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey, JSON, Enum as SQLEnum
+    Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey, JSON, Enum as SQLEnum, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -23,6 +23,7 @@ class UserRole(str, enum.Enum):
 class User(Base):
     """用户表"""
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("oauth_provider", "oauth_id", name="uix_user_oauth"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -35,6 +36,8 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     ai_quota_daily = Column(Integer, default=20)
     ai_quota_used = Column(Integer, default=0)
+    oauth_provider = Column(String(20), nullable=True)
+    oauth_id = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
@@ -119,6 +122,8 @@ class ForumComment(Base):
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=now_utc)
 
+    user = relationship("User")
+
 
 class Course(Base):
     """研学课程"""
@@ -144,6 +149,7 @@ class CourseProgress(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
+    course = relationship("Course")
     progress = Column(Float, default=0.0)  # 0-100
     is_completed = Column(Boolean, default=False)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
@@ -172,6 +178,7 @@ class CartItem(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    product = relationship("Product")
     quantity = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), default=now_utc)
 

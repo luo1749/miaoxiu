@@ -35,6 +35,25 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # 登录
+    ACCESS_TOKEN_REMEMBER_DAYS: int = 30
+    FRONTEND_URL: str = "http://localhost"
+
+    # GitHub OAuth
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+    GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/github/callback"
+
+    # WeChat OAuth（微信开放平台网站应用）
+    WECHAT_APP_ID: str = ""
+    WECHAT_APP_SECRET: str = ""
+    WECHAT_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/wechat/callback"
+
+    # QQ OAuth
+    QQ_APP_ID: str = ""
+    QQ_APP_KEY: str = ""
+    QQ_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/qq/callback"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

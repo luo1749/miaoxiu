@@ -15,6 +15,7 @@ import uuid
 import random
 from pathlib import Path
 from typing import List, Tuple
+import httpx
 from PIL import Image, ImageDraw
 
 # 颜色映射（与前端/SD_SUFFIX 保持一致）
@@ -52,6 +53,65 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
 def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
     return "#" + "".join(f"{c:02x}" for c in rgb)
 
+def _nearest_color_key(hex_color: str) -> str:
+    """将任意 hex 颜色映射到最近的标准色键"""
+    rgb = _hex_to_rgb(hex_color)
+    best_key = None
+    best_dist = float("inf")
+    for key, key_hex in COLOR_MAP.items():
+        kr, kg, kb = _hex_to_rgb(key_hex)
+        d = math.sqrt((rgb[0] - kr) ** 2 + (rgb[1] - kg) ** 2 + (rgb[2] - kb) ** 2)
+        if d < best_dist:
+            best_dist = d
+            best_key = key
+    return best_key
+
+
+async def _extract_reference_colors(image_url: str, upload_dir: str, n: int = 3) -> List[str]:
+    """提取参考图主色调，返回 hex 列表"""
+    try:
+        target_path = None
+        temp_path = None
+        if image_url.startswith("/uploads/"):
+            filename = image_url.replace("/uploads/", "")
+            target_path = Path(upload_dir) / filename
+        elif image_url.startswith("http"):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(image_url)
+                resp.raise_for_status()
+            temp_path = Path(upload_dir) / f"ref_{uuid.uuid4().hex}.png"
+            temp_path.write_bytes(resp.content)
+            target_path = temp_path
+
+        if not target_path or not target_path.exists():
+            return []
+
+        with Image.open(target_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((256, 256))
+            palette_img = img.quantize(colors=n + 2)
+            palette = palette_img.getpalette()[: (n + 2) * 3]
+            hexes = []
+            for i in range(n + 2):
+                r, g, b = palette[i * 3 : i * 3 + 3]
+                hexes.append(_rgb_to_hex((r, g, b)))
+
+        # 过滤掉接近纯白/纯黑的背景色
+        filtered = [
+            h
+            for h in hexes
+            if not (h.upper() == "#FFFFFF" or _luminance(h) < 0.08 or _luminance(h) > 0.95)
+        ]
+        return filtered[:n]
+    except Exception as e:
+        print(f"[pattern_generator] 参考图取色失败: {e}")
+        return []
+    finally:
+        if temp_path and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
 
 def _blend(c1: str, c2: str, alpha: float) -> str:
     r1, g1, b1 = _hex_to_rgb(c1)
@@ -239,9 +299,27 @@ def _luminance(hex_color: str) -> float:
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 
-def _pick_colors(style: str, user_colors: List[str]) -> Tuple[str, List[str], str]:
-    """根据风格与用户选择确定背景色、前景色、点缀色，并保证对比度"""
+def _pick_colors(style: str, user_colors: List[str], reference_colors: List[str] | None = None) -> Tuple[str, List[str], str]:
+    """根据风格、用户选择与参考图主色调确定背景色、前景色、点缀色，并保证对比度"""
     palette = STYLE_PALETTE.get(style, STYLE_PALETTE["miaoxiu"])
+
+    # 将参考图主色调映射为最近的标准色键，并优先融入 palette
+    mapped_refs: List[str] = []
+    if reference_colors:
+        for hex_color in reference_colors:
+            key = _nearest_color_key(hex_color)
+            if key and key not in mapped_refs:
+                mapped_refs.append(key)
+
+    # 合并选色：参考色优先，随后是用户自选色，去重
+    combined: List[str] = []
+    for key in mapped_refs:
+        if key in COLOR_MAP and key not in combined:
+            combined.append(key)
+    for key in user_colors:
+        if key in COLOR_MAP and key not in combined:
+            combined.append(key)
+    user_colors = combined
 
     # 背景色：优先从用户选中里挑背景候选，否则按风格默认
     bg_color_key = None
@@ -280,12 +358,13 @@ def generate_pattern(
     width: int = 1024,
     height: int = 1024,
     upload_dir: str = "app/uploads",
+    reference_colors: List[str] | None = None,
 ) -> str:
-    """生成纹样 PNG，保存到 upload_dir，返回相对路径"""
+    """生成纹样 PNG，保存到 upload_dir，返回相对路径；reference_colors 为参考图主色调"""
     motif_key = _extract_motif(prompt)
     drawer = MOTIF_DRAWERS.get(motif_key, _draw_geometric)
 
-    bg, fg, accent = _pick_colors(style, colors)
+    bg, fg, accent = _pick_colors(style, colors, reference_colors)
     img = Image.new("RGB", (width, height), bg)
     draw = ImageDraw.Draw(img)
 
@@ -364,9 +443,13 @@ async def generate_images(
     """
     生成纹样图片入口。
     当前使用算法生成；如果后续配置并启用了本地 SD，可切换回 sd_client.generate_images_sd。
-    image_url 参数保留以兼容图生图接口，当前版本仅做日志记录不实际参与生成。
+    若提供 image_url（图生图），会自动提取参考图主色调并融入生成配色。
     """
+    reference_colors: List[str] = []
     if image_url:
-        # 图生图：以参考图的主色调替换第一优先色（简单模拟）
-        pass
-    return [generate_pattern(prompt, style, colors, width, height, upload_dir) for _ in range(batch_size)]
+        reference_colors = await _extract_reference_colors(image_url, upload_dir, n=3)
+        print(f"[pattern_generator] 参考图主色调: {reference_colors}")
+    return [
+        generate_pattern(prompt, style, colors, width, height, upload_dir, reference_colors)
+        for _ in range(batch_size)
+    ]

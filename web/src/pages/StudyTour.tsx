@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api';
 import { useAppStore } from '../store';
+import { useAuth } from '../auth';
 import { toast } from 'sonner';
 import {
   GraduationCap, Play, Calendar, MapPin, Award,
@@ -135,13 +136,28 @@ export default function StudyTour() {
   const [showCert, setShowCert] = useState(false);
   const [showPayment, setShowPayment] = useState<string | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const { addToCart, cart } = useAppStore();
+  const { isLoggedIn } = useAuth();
 
   useEffect(() => {
     api.courses.list()
       .then((data) => setCourses(data || []))
       .catch(() => toast.error('课程列表加载失败'));
   }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    api.courses.progressAll()
+      .then((items) => {
+        const map: Record<string, number> = {};
+        items.forEach((it: any) => {
+          map[it.course_id || it.course?.id] = it.progress || 0;
+        });
+        setProgressMap(map);
+      })
+      .catch(() => {});
+  }, [isLoggedIn, courses]);
 
   const TABS = [
     { key: 'courses' as const, label: '线上课程', icon: Play },
@@ -221,12 +237,18 @@ export default function StudyTour() {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-[#F0EDE0] opacity-50">{course.difficulty}</span>
-                      <span
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium"
-                        style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
-                      >
-                        {t("st.free")}
-                      </span>
+                      {progressMap[course.id] > 0 ? (
+                        <span className="text-xs" style={{ color: '#E84A3A' }}>
+                          已学 {Math.round(progressMap[course.id])}%
+                        </span>
+                      ) : (
+                        <span
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                          style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
+                        >
+                          {t("st.free")}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </Link>
@@ -353,7 +375,7 @@ export default function StudyTour() {
                     <div className="flex items-center justify-between">
                       <span className="text-[#E84A3A] font-bold">¥{pd.price}</span>
                       <button
-                        onClick={() => addToCart({ id: pd.id, name: pd.name, price: pd.price, image: pd.image, quantity: 1, type: pd.type as 'ai' | 'handmade' })}
+                        onClick={() => addToCart({ id: pd.id, productId: pd.id, name: pd.name, price: pd.price, image: pd.image, quantity: 1, type: pd.type as 'ai' | 'handmade' })}
                         className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1"
                         style={{ backgroundColor: '#2441A9', color: '#F0EDE0' }}
                       >

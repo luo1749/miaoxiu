@@ -7,6 +7,7 @@ import { Toaster } from 'sonner';
 import Layout from './components/Layout';
 import Home from './pages/Home';
 import Login from './pages/Login';
+import OAuthCallback from './pages/OAuthCallback';
 
 // Lazy load heavy pages for performance
 const AIGenerator = lazy(() => import('./pages/AIGenerator'));
@@ -55,6 +56,7 @@ export default function App() {
         <Toaster position="top-center" richColors />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Home />} />
             <Route path="/ai-generator" element={<Suspense fallback={<LoadingFallback />}><AIGenerator /></Suspense>} />

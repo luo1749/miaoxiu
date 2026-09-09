@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
@@ -22,6 +22,19 @@ def list_courses(
         query = query.filter(models.Course.is_featured == featured)
     return query.order_by(models.Course.created_at.desc()).offset(skip).limit(limit).all()
 
+
+@router.get("/progress", response_model=List[schemas.CourseProgressOut])
+def list_progress(
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户所有课程进度"""
+    return (
+        db.query(models.CourseProgress)
+        .filter(models.CourseProgress.user_id == user.id)
+        .order_by(models.CourseProgress.updated_at.desc())
+        .all()
+    )
 
 
 @router.get("/{course_id}", response_model=schemas.CourseOut)
@@ -47,6 +60,25 @@ def create_course(
     return course
 
 
+@router.get("/{course_id}/progress", response_model=schemas.CourseProgressSimpleOut)
+def get_progress(
+    course_id: UUID,
+    user: models.User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """获取指定课程的学习进度（游客返回 0）"""
+    if user is None:
+        return {"progress": 0.0, "is_completed": False, "updated_at": None}
+    progress = (
+        db.query(models.CourseProgress)
+        .filter(models.CourseProgress.user_id == user.id, models.CourseProgress.course_id == course_id)
+        .first()
+    )
+    if not progress:
+        return {"progress": 0.0, "is_completed": False, "updated_at": None}
+    return progress
+
+
 @router.put("/{course_id}/progress", response_model=schemas.CourseProgressOut)
 def update_progress(
     course_id: UUID,
@@ -68,5 +100,3 @@ def update_progress(
     db.commit()
     db.refresh(progress)
     return progress
-
-

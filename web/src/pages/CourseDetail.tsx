@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -31,27 +31,51 @@ export default function CourseDetail() {
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const lastSavedRef = useRef(0);
 
   useEffect(() => {
     if (!id) return;
     api.courses.get(id)
       .then((c) => { setCourse(c); document.title = `${c.title} · 课程详情`; })
-      .catch(() => toast.error('课程加载失败'))
+      .catch(() => toast.error('课程加载失败'));
+    api.courses.progress(id)
+      .then((p) => {
+        setProgress(p.progress || 0);
+        lastSavedRef.current = p.progress || 0;
+      })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [id]);
 
+  const saveProgress = useCallback(async (pct: number) => {
+    if (!course || !isLoggedIn) return;
+    try {
+      await api.courses.updateProgress(course.id, pct);
+      lastSavedRef.current = pct;
+    } catch {
+      // 忽略保存失败，避免打断学习
+    }
+  }, [course, isLoggedIn]);
+
   const handleTimeUpdate = () => {
     const v = videoRef.current;
-    if (!v || !course) return;
+    if (!v || !course || !v.duration) return;
     const pct = Math.min(100, Math.round((v.currentTime / v.duration) * 100));
     setProgress(pct);
+    if (isLoggedIn && pct - lastSavedRef.current >= 5) {
+      saveProgress(pct);
+    }
   };
 
   const handleComplete = async () => {
-    if (!course || !isLoggedIn) return;
+    if (!course) return;
+    setProgress(100);
+    if (!isLoggedIn) {
+      toast.info('登录后可保存学习进度并获取证书');
+      return;
+    }
     try {
-      await api.courses.updateProgress(course.id, 100);
-      setProgress(100);
+      await saveProgress(100);
       toast.success('课程学习完成，证书可在个人中心查看');
     } catch (e: any) {
       toast.error(e.message || '进度保存失败');

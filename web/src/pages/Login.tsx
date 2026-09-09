@@ -2,9 +2,11 @@
 import { useI18n } from "../i18n";
 import { useNavigate } from 'react-router';
 import { useAuth } from '../auth';
+import { api } from '../api';
+import { toast } from 'sonner';
 import {
   LogIn, UserPlus, Shield, User, ArrowLeft, Eye, EyeOff,
-  Sparkles,
+  Sparkles, Github,
 } from 'lucide-react';
 
 export default function Login() {
@@ -16,6 +18,7 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [remember, setRemember] = useState(false);
   const navigate = useNavigate();
   const { login, register } = useAuth();
 
@@ -28,7 +31,7 @@ export default function Login() {
         setError('请填写{t("login.email")}和{t("login.password")}');
         return;
       }
-      const ok = await login(email, password);
+      const ok = await login(email, password, remember);
       if (ok) {
         navigate('/');
       } else {
@@ -244,6 +247,16 @@ export default function Login() {
             <p className="text-xs text-red-400 bg-red-400/10 px-3 py-2 rounded-lg">{error}</p>
           )}
 
+          <label className="flex items-center gap-2 text-xs text-[#F0EDE0] opacity-60 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="rounded border-white/10 bg-white/5"
+            />
+            记住我（30 天内自动登录）
+          </label>
+
           <button
             type="submit"
             className="w-full py-3.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all hover:opacity-90"
@@ -253,6 +266,61 @@ export default function Login() {
             {mode === 'login' ? '登录' : '注册'}
           </button>
         </form>
+
+        <div className="mt-4 flex items-center gap-3">
+          <div className="flex-1 h-px" style={{ backgroundColor: 'rgba(240,237,224,0.08)' }} />
+          <span className="text-[10px] text-[#F0EDE0] opacity-30">或</span>
+          <div className="flex-1 h-px" style={{ backgroundColor: 'rgba(240,237,224,0.08)' }} />
+        </div>
+
+        <button
+          onClick={async () => {
+            try {
+              const { url } = await api.auth.githubAuthorize();
+              window.location.href = url;
+            } catch (e: any) {
+              toast?.error?.(e.message || 'GitHub 登录未配置') ?? alert(e.message || 'GitHub 登录未配置');
+            }
+          }}
+          className="w-full mt-4 py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
+          style={{ backgroundColor: 'rgba(240,237,224,0.06)', color: '#F0EDE0', border: '1px solid rgba(240,237,224,0.1)' }}
+        >
+          <Github size={16} />
+          使用 GitHub 登录
+        </button>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <button
+            onClick={async () => {
+              try {
+                const { url } = await api.auth.wechatAuthorize();
+                window.location.href = url;
+              } catch (e: any) {
+                toast?.error?.(e.message || '微信登录未配置') ?? alert(e.message || '微信登录未配置');
+              }
+            }}
+            className="py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
+            style={{ backgroundColor: 'rgba(7,193,96,0.12)', color: '#07C160', border: '1px solid rgba(7,193,96,0.2)' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 13.5A1.5 1.5 0 1 1 8.5 10.5 1.5 1.5 0 0 1 8.5 13.5Zm6.5-3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm4.5 3.5c0 3.5-3.6 6.5-8 6.5-.8 0-1.6-.1-2.3-.2L7.5 21l.4-2.2C5.6 17.5 4 15.6 4 13.5c0-3.5 3.6-6.5 8-6.5s8 2.9 8 6.5Z"/></svg>
+            微信登录
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                const { url } = await api.auth.qqAuthorize();
+                window.location.href = url;
+              } catch (e: any) {
+                toast?.error?.(e.message || 'QQ 登录未配置') ?? alert(e.message || 'QQ 登录未配置');
+              }
+            }}
+            className="py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all hover:opacity-90"
+            style={{ backgroundColor: 'rgba(18,183,245,0.12)', color: '#12B7F5', border: '1px solid rgba(18,183,245,0.2)' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.5 2 2 6 2 10.5c0 2.6 1.4 5 3.5 6.6-.1 1-.7 2.8-1.1 3.9 1.6-.2 3.4-1 4.4-1.7.7.2 1.5.2 2.2.2 5.5 0 10-4 10-9S17.5 2 12 2Zm-3 8.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm6 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+            QQ 登录
+          </button>
+        </div>
 
         {/* Demo accounts */}
         <div className="mt-6 space-y-2">

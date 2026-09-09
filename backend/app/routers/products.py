@@ -94,8 +94,13 @@ def list_cart(
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取购物车"""
-    return db.query(models.CartItem).filter(models.CartItem.user_id == user.id).all()
+    """获取当前用户购物车"""
+    return (
+        db.query(models.CartItem)
+        .filter(models.CartItem.user_id == user.id)
+        .order_by(models.CartItem.created_at.desc())
+        .all()
+    )
 
 
 @router.post("/cart/items", response_model=schemas.CartItemOut)
@@ -117,6 +122,29 @@ def add_to_cart(
         return existing
     item = models.CartItem(user_id=user.id, product_id=payload.product_id, quantity=payload.quantity)
     db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.put("/cart/items/{item_id}", response_model=schemas.CartItemOut)
+def update_cart_item(
+    item_id: UUID,
+    quantity: int,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """更新购物车商品数量"""
+    if quantity < 1:
+        raise HTTPException(status_code=400, detail="数量不能小于 1")
+    item = (
+        db.query(models.CartItem)
+        .filter(models.CartItem.id == item_id, models.CartItem.user_id == user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="购物车商品不存在")
+    item.quantity = quantity
     db.commit()
     db.refresh(item)
     return item
