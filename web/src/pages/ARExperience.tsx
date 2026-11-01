@@ -438,7 +438,7 @@ interface ARTryOnProps {
 function ARTryOn({ category: initialCategory }: ARTryOnProps) {
   const [selectedPattern, setSelectedPattern] = useState(PATTERNS[0]);
   const category: 'clothing' | 'home' | 'model' = initialCategory === 'tryon' ? 'clothing' : initialCategory === 'home' ? 'home' : 'model';
-  const [showAR, setShowAR] = useState(false);
+  const [showAR, setShowAR] = useState(true); // 临时强制直接渲染 ARTryOnCamera，跳过 3D 预览
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const startCamera = async () => {
@@ -579,7 +579,7 @@ function ARTryOn({ category: initialCategory }: ARTryOnProps) {
    ═══════════════════════════════════════════ */
 
 export default function ARExperience() {
-  const [tab, setTab] = useState<ARExperience>('wax');
+  const [tab, setTab] = useState<ARExperience>('tryon'); // 临时强制默认进入 AR 试衣 tab 用于测试
 
   const TABS = [
     { key: 'wax' as ARExperience, icon: Paintbrush, label: '虚拟蜡染工坊', desc: '模拟蜡刀绘制 · AI风格迁移' },

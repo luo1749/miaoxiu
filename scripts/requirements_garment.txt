@@ -1,0 +1,31 @@
+# 苗绣服饰 3D 资产生成管线依赖
+# 安装方式：D:\miaoxiu\vton_test_env\Scripts\python.exe -m pip install -r requirements_garment.txt
+
+# PyTorch CUDA（若在线安装解析为 CPU 版，请从已有 CUDA 环境离线复制）
+torch>=2.0
+torchvision>=0.15
+torchaudio>=2.0
+
+# Hunyuan3D-2 依赖（详见 tools\Hunyuan3D-2\requirements.txt）
+ninja
+pybind11
+diffusers>=0.25
+einops
+opencv-python
+numpy
+transformers>=4.48
+omegaconf
+trimesh
+pymeshlab
+pygltflib
+xatlas
+accelerate
+gradio
+fastapi
+uvicorn
+rembg
+onnxruntime
+
+# 本管线额外依赖
+Pillow
+fast-simplification

@@ -1,16 +1,22 @@
-# 通用
+﻿# 环境变量与敏感配置
 .env
+.env.server
+.env.local
+
+# 系统文件
 .DS_Store
+Thumbs.db
 *.log
 
-# 前端
+# 前端构建产物
 web/node_modules/
 web/dist/
 web/.vite/
+web/.cache/
 
 # 后端
 backend/__pycache__/
-backend/*.pyc
+backend/**/*.pyc
 backend/.venv/
 backend/venv/
 backend/.env
@@ -21,4 +27,51 @@ backend/app/uploads/*
 backend/alembic/versions/*.py
 !backend/alembic/versions/.gitkeep
 
+# 大型模型与生成产物
+models/
+output/
+web/public/models/*.glb
+web/public/models/*.tflite
+web/public/models/*.fbx
+web/public/models/*.penguin.bak
+web/public/draco/
+
+# AI 训练与推理环境（大体积）
+ComfyUI/
+tools/
+datasets/
+python_extra/
+vton_test_env/
+*.safetensors
+*.ckpt
+*.pth
+*.onnx
+
+# 部署与临时脚本
+miaoxiu-deploy.zip
+make_deploy_zip.py
+remote_*.py
+upload_*.py
+update_*.py
+install_docker.py
+collect_images_bing.py
+convert_base_to_ckpt.py
+download_base_ckpt.py
+download_te2.py
+make_test_img2img.py
+patch_sdxl.py
+patch_sdxl2.py
+start_comfyui.ps1
+train_miaoxiu_lora.ps1
+test_*.py
+test_*.json
+comfy_*.txt
+comfy_*.py
+
+# 文档生成中间文件
+*.tmp
+*.temp
+# Python
+**/__pycache__/
+**/*.pyc
 

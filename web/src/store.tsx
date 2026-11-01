@@ -170,7 +170,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [cart]);
 
-  // 登录后将本地购物车合并到后端，然后拉取服务端购物车
+  // 登录后将本地购物车合并到后端，然后拉取服务端购物车（每个请求独立捕获，避免阻断页面）
   useEffect(() => {
     if (!isLoggedIn) {
       setHasSyncedCart(false);
@@ -178,27 +178,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     if (hasSyncedCart) return;
     setHasSyncedCart(true);
+
+    let cancelled = false;
+
     (async () => {
       try {
         const raw = localStorage.getItem(CART_STORAGE_KEY);
         const localItems: CartItem[] = raw ? JSON.parse(raw) : [];
-        const serverItems = await api.cart.list();
+
+        let serverItems: any[] = [];
+        try {
+          serverItems = await api.cart.list();
+        } catch (cartListErr) {
+          console.warn('[store] 拉取服务端购物车失败，使用空列表合并', cartListErr);
+          serverItems = [];
+        }
+        if (cancelled) return;
+
         const serverProductIds = new Set(serverItems.map((item) => item.product?.id ?? item.id));
         const toMerge = localItems.filter((item) => !serverProductIds.has(item.productId || item.id));
+
         if (toMerge.length > 0) {
           await Promise.allSettled(
             toMerge.map((item) =>
               api.cart.add({ product_id: item.productId || item.id, quantity: item.quantity })
+                .catch((err) => console.warn('[store] 合并购物车条目失败', err))
             )
           );
         }
-        const freshServerItems = await api.cart.list();
-        setCart(freshServerItems.map(mapServerCartItem));
-        localStorage.removeItem(CART_STORAGE_KEY);
+        if (cancelled) return;
+
+        let freshServerItems: any[] = [];
+        try {
+          freshServerItems = await api.cart.list();
+        } catch (cartListErr) {
+          console.warn('[store] 拉取最新服务端购物车失败，保留本地购物车', cartListErr);
+          freshServerItems = [];
+        }
+        if (cancelled) return;
+
+        if (freshServerItems.length > 0) {
+          setCart(freshServerItems.map(mapServerCartItem));
+          localStorage.removeItem(CART_STORAGE_KEY);
+        } else if (localItems.length > 0) {
+          // 后端为空或失败时保留本地购物车，避免用户数据丢失
+          setCart(localItems);
+        }
       } catch (e) {
         console.error('购物车同步失败', e);
       }
     })();
+
+    return () => { cancelled = true; };
   }, [isLoggedIn, hasSyncedCart]);
 
   const addGeneratedImage = useCallback((img: GeneratedImage) => {

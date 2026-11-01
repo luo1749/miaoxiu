@@ -1,32 +1,38 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { FilesetResolver, PoseLandmarker, ImageSegmenter } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { createSkinnedGarment, createSkinnedClothingFromGeometry, updateClothingPose, applyScreenSpaceMask, type GarmentType } from './ARClothingMesh';
-async function createPoseLandmarker(vision: any, delegate: 'GPU' | 'CPU') {
+function getOffscreenWebGL2Canvas(): OffscreenCanvas | undefined {
+  if (typeof OffscreenCanvas === 'undefined') return undefined;
+  try {
+    const c = new OffscreenCanvas(1, 1);
+    if (!c.getContext('webgl2')) return undefined;
+    return c;
+  } catch {
+    return undefined;
+  }
+}
+
+async function createIsolatedPoseLandmarker(vision: any, runningMode: 'IMAGE' | 'VIDEO') {
+  const canvas = getOffscreenWebGL2Canvas();
+  const delegate = canvas ? 'GPU' : 'CPU';
   return PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath: '/models/pose_landmarker_lite.task',
       delegate,
     },
-    runningMode: 'VIDEO',
+    runningMode,
     numPoses: 1,
+    canvas,
   });
 }
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      resolve();
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = src;
-    script.crossOrigin = 'anonymous';
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`加载失败: ${src}`));
-    document.body.appendChild(script);
-  });
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} 超时（${ms}ms）`)), ms)),
+  ]);
 }
 
 
@@ -86,7 +92,7 @@ function drawRegionMask(
   ctx.clearRect(0, 0, width, height);
   if (applyMask && maskCanvas) {
     // 有真实人体分割时直接用完整身体轮廓，不再与多边形取交集，保证袖子/裙摆不被裁掉
-    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.drawImage(maskCanvas, 0, 0, width, height);
     return;
   }
   ctx.fillStyle = '#FFFFFF';
@@ -102,6 +108,7 @@ interface ARTryOnCameraProps {
 }
 
 export default function ARTryOnCamera({ patternImage, category, onClose }: ARTryOnCameraProps) {
+  console.log('[AR] ARTryOnCamera mounted', { category, patternImage });
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -113,7 +120,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
   const clothingBonesRef = useRef<THREE.Bone[]>([]);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
   const gltfInputRef = useRef<HTMLInputElement>(null);
-  const selfieRef = useRef<any>(null);
+  const imageSegmenterRef = useRef<ImageSegmenter | null>(null);
   const maskReadyRef = useRef(false);
   const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskCtxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -131,7 +138,30 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
   const [useStaticImage, setUseStaticImage] = useState(false);
   const [staticImageUrl, setStaticImageUrl] = useState<string | null>(null);
   const [garmentType, setGarmentType] = useState<GarmentType>('tshirt');
+  const [loadingStage, setLoadingStage] = useState('准备中...');
   const clothingTextureRef = useRef<THREE.Texture | null>(null);
+
+  // 全局异步异常捕获：避免无关 Promise 异常在控制台干扰 AR 调试
+  useEffect(() => {
+    const onUnhandled = (e: PromiseRejectionEvent) => {
+      const reason = e.reason?.message || String(e.reason) || '';
+      if (reason.includes('/api/v1/products/cart/items') || reason.includes('Failed to fetch')) {
+        console.warn('[AR] ignored unrelated rejection:', reason);
+        e.preventDefault();
+        return;
+      }
+      console.warn('[AR] unhandled rejection:', e.reason);
+    };
+    const onError = (e: ErrorEvent) => {
+      console.warn('[AR] global error:', e.message);
+    };
+    window.addEventListener('unhandledrejection', onUnhandled);
+    window.addEventListener('error', onError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onUnhandled);
+      window.removeEventListener('error', onError);
+    };
+  }, []);
 
   const cleanup = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -145,6 +175,10 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
       landmarkerRef.current?.close();
     } catch {}
     landmarkerRef.current = null;
+    try {
+      imageSegmenterRef.current?.close();
+    } catch {}
+    imageSegmenterRef.current = null;
     if (rendererRef.current) {
       rendererRef.current.dispose();
       rendererRef.current.forceContextLoss();
@@ -230,26 +264,44 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
   // 初始化 MediaPipe + 摄像头
   useEffect(() => {
-    if (useStaticImage || staticImageUrl) return;
+    console.log('[AR] init useEffect triggered', { useStaticImage, staticImageUrl });
+    if (useStaticImage || staticImageUrl) {
+      console.log('[AR] init useEffect early return (static mode)');
+      return;
+    }
 
     let mounted = true;
 
+    let initTimeoutId: number | undefined;
+    const setStage = (stage: string) => {
+      if (mounted) setLoadingStage(stage);
+      console.log('[AR stage]', stage);
+    };
+
+    // 全局兜底：35 秒仍未完成则强制结束 loading
+    initTimeoutId = window.setTimeout(() => {
+      if (mounted) {
+        console.error('[AR] init global timeout');
+        setError('AR 初始化超时（10秒），请检查摄像头权限、网络或刷新页面重试');
+        setLoading(false);
+      }
+    }, 10000);
+
     async function init() {
       try {
-        const vision = await FilesetResolver.forVisionTasks('/wasm');
-        let landmarker;
-        try {
-          landmarker = await createPoseLandmarker(vision, 'GPU');
-        } catch {
-          landmarker = await createPoseLandmarker(vision, 'CPU');
-        }
+        setStage('【准备初始化】');
+        setStage('【MediaPipe加载】');
+        const vision = await withTimeout(FilesetResolver.forVisionTasks('/wasm'), 10000, 'MediaPipe WASM 下载');
+        
+        const landmarker = await withTimeout(createIsolatedPoseLandmarker(vision, 'VIDEO'), 15000, 'PoseLandmarker 初始化');
         if (!mounted) return;
         landmarkerRef.current = landmarker;
 
-        const stream = await navigator.mediaDevices.getUserMedia({
+        setStage('【请求摄像头】');
+        const stream = await withTimeout(navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
-        });
+        }), 15000, '摄像头启动');
         if (!mounted) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -263,7 +315,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         }
         videoRef.current.srcObject = stream;
 
-        await new Promise<void>((resolve, reject) => {
+        await withTimeout(new Promise<void>((resolve, reject) => {
           const video = videoRef.current!;
           if (video.readyState >= 2) {
             resolve();
@@ -279,7 +331,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
           };
           video.addEventListener('loadedmetadata', onLoaded);
           video.addEventListener('error', onError);
-        });
+        }), 10000, '视频流就绪');
 
         await videoRef.current.play();
         if (!mounted) return;
@@ -306,9 +358,19 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
           alpha: true,
           antialias: true,
           preserveDrawingBuffer: true,
+          powerPreference: 'high-performance',
+          failIfMajorPerformanceCaveat: false,
         });
         renderer.setSize(width, height);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        renderer.domElement.addEventListener('webglcontextlost', (ev) => {
+          ev.preventDefault();
+          console.error('[AR] WebGL context lost');
+          setError('WebGL context lost. Close other camera pages and retry.');
+          setLoading(false);
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = 0;
+        });
         rendererRef.current = renderer;
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.9));
@@ -318,9 +380,17 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
         const textureLoader = new THREE.TextureLoader();
         textureLoader.setCrossOrigin('anonymous');
-        const texture = await new Promise<THREE.Texture>((resolve, reject) => {
-          textureLoader.load(patternImage, resolve, undefined, () => reject(new Error('纹样图片加载失败')));
-        });
+        let texture: THREE.Texture;
+        try {
+          texture = await withTimeout(new Promise<THREE.Texture>((resolve, reject) => {
+            textureLoader.load(patternImage, resolve, undefined, () => reject(new Error('pattern image load failed')));
+          }), 10000, '纹样贴图加载');
+        } catch (texErr) {
+          console.warn('[AR] pattern image load failed, using white fallback texture', texErr);
+          const fallback = new Uint8Array([255, 255, 255, 255]);
+          texture = new THREE.DataTexture(fallback, 1, 1, THREE.RGBAFormat);
+          texture.needsUpdate = true;
+        }
         if (!mounted) return;
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
@@ -369,33 +439,39 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
         applyScreenSpaceMask(clothing, regionTexture, new THREE.Vector2(width, height));
 
+        // 使用 MediaPipe ImageSegmenter（Selfie Segmenter）进行像素级人体分割。
+        // 通过 OffscreenCanvas 创建隔离的 WebGL 上下文，避免与 Three.js 冲突。
+        setStage('【人像分割就绪】');
         try {
-          await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465748/selfie_segmentation.js');
-          const SelfieSegmentation = (window as any).SelfieSegmentation;
-          const selfie = new SelfieSegmentation({
-            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465748/${file}`,
-          });
-          selfie.setOptions({ modelSelection: 1 });
-          selfie.onResults((results: any) => {
-            const ctx = maskCtxRef.current;
-            const tex = maskTextureRef.current;
-            if (ctx && tex && results.segmentationMask) {
-              ctx.drawImage(results.segmentationMask, 0, 0, width, height);
-              tex.needsUpdate = true;
-              maskReadyRef.current = true;
-            }
-          });
-          selfieRef.current = selfie;
+          const segCanvas = getOffscreenWebGL2Canvas();
+          const segDelegate = segCanvas ? 'GPU' : 'CPU';
+          const imageSegmenter = await withTimeout(ImageSegmenter.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: '/models/selfie_segmenter.tflite',
+              delegate: segDelegate,
+            },
+            runningMode: 'VIDEO',
+            outputCategoryMask: true,
+            outputConfidenceMasks: false,
+            canvas: segCanvas,
+          }), 15000, 'SelfieSegmenter 初始化');
+          if (!mounted) return;
+          imageSegmenterRef.current = imageSegmenter;
+          console.log('[AR] selfie segmenter ready, delegate=' + segDelegate);
         } catch (segErr) {
-          console.warn('[AR] 人体分割加载失败，将不使用身体蒙版', segErr);
+          console.warn('[AR] selfie segmenter init failed, falling back to polygon mask', segErr);
         }
 
+        window.clearTimeout(initTimeoutId);
         setLoading(false);
         if (category === 'clothing') {
+          setStage('【GLB模型加载】');
           setTimeout(() => loadExampleShirt(), 600);
         }
+        setStage('【渲染启动】');
         startDetection();
       } catch (e: any) {
+        window.clearTimeout(initTimeoutId);
         const msg = e?.message || String(e);
         if (msg.includes('Permission denied') || msg.includes('NotAllowedError')) {
           setError('摄像头权限被拒绝。');
@@ -426,8 +502,36 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
         if (video.readyState >= 2 && video.videoWidth > 0) {
           try {
-            if (selfieRef.current) {
-              selfieRef.current.send({ image: video }).catch(() => {});
+            if (imageSegmenterRef.current && maskCtxRef.current && maskCanvasRef.current && maskTextureRef.current) {
+              try {
+                const segResult = imageSegmenterRef.current.segmentForVideo(video, performance.now());
+                const catMask = segResult.categoryMask;
+                if (catMask) {
+                  const mw = catMask.width;
+                  const mh = catMask.height;
+                  const maskData = catMask.getAsUint8Array();
+                  if (maskCanvasRef.current.width !== mw || maskCanvasRef.current.height !== mh) {
+                    maskCanvasRef.current.width = mw;
+                    maskCanvasRef.current.height = mh;
+                  }
+                  const imgData = maskCtxRef.current.createImageData(mw, mh);
+                  const pixels = imgData.data;
+                  for (let i = 0; i < mw * mh; i++) {
+                    const v = maskData[i] > 0 ? 255 : 0;
+                    const idx = i * 4;
+                    pixels[idx] = v;
+                    pixels[idx + 1] = v;
+                    pixels[idx + 2] = v;
+                    pixels[idx + 3] = 255;
+                  }
+                  maskCtxRef.current.putImageData(imgData, 0, 0);
+                  maskTextureRef.current.needsUpdate = true;
+                  maskReadyRef.current = true;
+                  segResult.close();
+                }
+              } catch (segFrameErr) {
+                console.warn('[AR] segmentation frame error', segFrameErr);
+              }
             }
           } catch {
             // ignore
@@ -474,6 +578,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
     return () => {
       mounted = false;
+      window.clearTimeout(initTimeoutId);
       cleanup();
     };
   }, [patternImage, category, useStaticImage, staticImageUrl, cleanup]);
@@ -487,15 +592,10 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
     async function initStatic() {
       try {
-        const vision = await FilesetResolver.forVisionTasks('/wasm');
-        const landmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: '/models/pose_landmarker_lite.task',
-            delegate: 'GPU',
-          },
-          runningMode: 'IMAGE',
-          numPoses: 1,
-        });
+        setLoadingStage('下载 MediaPipe WASM 资源...');
+        const vision = await withTimeout(FilesetResolver.forVisionTasks('/wasm'), 10000, 'MediaPipe WASM 下载');
+        setLoadingStage('初始化 AI 姿态识别...');
+        const landmarker = await withTimeout(createIsolatedPoseLandmarker(vision, 'IMAGE'), 15000, 'PoseLandmarker 初始化');
         if (!mounted) return;
         landmarkerRef.current = landmarker;
 
@@ -553,7 +653,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
     clothingBonesRef.current = newClothing.skeleton.bones;
   }, [garmentType, category, useStaticImage]);
 
-  const title = category === 'home' ? 'AR 家居试用' : category === 'model' ? '虚拟合影' : 'AR 虚拟试穿';
+  const title = category === 'home' ? 'AR 家居试用' : category === 'model' ? '虚拟合影' : 'AR 苗绣服饰试穿';
 
   function replaceClothingFromSource(sourceMesh: THREE.SkinnedMesh | THREE.Mesh) {
     const scene = sceneRef.current;
@@ -578,12 +678,21 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
     clothingBonesRef.current = newClothing.skeleton.bones;
   }
 
+
+function createGLTFLoader(): GLTFLoader {
+  const loader = new GLTFLoader();
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath('/draco/');
+  loader.setDRACOLoader(dracoLoader);
+  return loader;
+}
+
   const handleGlbUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const loader = new GLTFLoader();
+      const loader = createGLTFLoader();
       loader.parse(reader.result as ArrayBuffer, '', (gltf) => {
         let sourceMesh: THREE.SkinnedMesh | THREE.Mesh | null = null;
         gltf.scene.traverse((obj: any) => {
@@ -603,24 +712,32 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
 
   const loadExampleShirt = async () => {
     try {
-      const resp = await fetch('/models/readyplayer.me.glb');
+      const resp = await fetch('/models/miao-garment.glb');
+      if (!resp.ok) {
+        alert('苗绣服饰模型尚未就绪，请先生成并放置到 web/public/models/miao-garment.glb');
+        return;
+      }
       const buffer = await resp.arrayBuffer();
-      const loader = new GLTFLoader();
-      loader.parse(buffer, '', (gltf) => {
-        let sourceMesh: THREE.SkinnedMesh | THREE.Mesh | null = null;
-        gltf.scene.traverse((obj: any) => {
-          if (obj.isSkinnedMesh && obj.name === 'Wolf3D_Outfit_Top') sourceMesh = obj as THREE.SkinnedMesh;
+      const loader = createGLTFLoader();
+      try {
+        loader.parse(buffer, '', (gltf) => {
+          let sourceMesh: THREE.SkinnedMesh | THREE.Mesh | null = null;
+          gltf.scene.traverse((obj: any) => {
+            if (!sourceMesh && (obj.isSkinnedMesh || obj.isMesh)) sourceMesh = obj as THREE.SkinnedMesh | THREE.Mesh;
+          });
+          if (!sourceMesh) {
+            alert('Model contains no usable mesh');
+            return;
+          }
+          replaceClothingFromSource(sourceMesh);
+        }, (err) => {
+          alert('Failed to parse Miao garment model: ' + (err?.message || 'unknown error'));
         });
-        if (!sourceMesh) {
-          alert('示例模型中未找到上衣网格');
-          return;
-        }
-        replaceClothingFromSource(sourceMesh);
-      }, (err) => {
-        alert('加载示例模型失败：' + (err?.message || '未知错误'));
-      });
+      } catch (parseErr: any) {
+        alert('Failed to parse Miao garment model: ' + parseErr.message);
+      }
     } catch (e: any) {
-      alert('获取示例模型失败：' + e.message);
+      alert('获取苗绣服饰模型失败：' + e.message);
     }
   };
 
@@ -721,7 +838,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         {loading && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-[#F0EDE0] opacity-80 z-20">
             <div className="mb-3 w-8 h-8 border-2 border-[#F0EDE0] border-t-transparent rounded-full animate-spin" />
-            正在启动摄像头与 AI 姿态识别...
+            {loadingStage}
             <span className="text-xs mt-2 opacity-60">首次加载模型可能需要 5-10 秒</span>
           </div>
         )}
@@ -730,7 +847,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6 z-20">
             <p className="mb-2" style={{ color: '#E84A3A' }}>{error}</p>
             <p className="text-[#F0EDE0] opacity-50 text-xs mb-4 max-w-md">
-              没有摄像头时，您可以上传一张包含上半身的照片，系统会自动识别并叠加纹样。
+              没有摄像头时，您可以上传一张包含上半身的照片，系统会自动识别并叠加苗绣纹样。
             </p>
             <label
               className="px-4 py-2 rounded text-sm font-medium cursor-pointer transition hover:opacity-80"
@@ -783,7 +900,7 @@ export default function ARTryOnCamera({ patternImage, category, onClose }: ARTry
         )}
         {detected && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-xs z-10" style={{ backgroundColor: 'rgba(36,65,169,0.85)', color: '#F0EDE0' }}>
-            已识别到人体，移动身体即可调整纹样位置
+            已识别到人体，移动身体即可调整苗绣服饰位置
           </div>
         )}
 

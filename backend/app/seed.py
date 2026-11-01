@@ -19,7 +19,7 @@ def seed_data(engine):
             hashed_password=get_password_hash("123456"),
             role=models.UserRole.admin,
             avatar="images/pattern-1.jpg",
-            bio="灵壤平台管理员，负责运营与数据管理",
+            bio="平台管理员，负责运营与数据管理",
             ai_quota_daily=9999,
         )
         # 普通用户

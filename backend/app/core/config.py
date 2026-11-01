@@ -4,7 +4,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     """应用配置，优先从环境变量读取"""
-    PROJECT_NAME: str = "灵壤·铜仁苗绣蜡染非遗数字化平台"
+    PROJECT_NAME: str = "AI+AR赋能铜仁苗绣蜡染非遗活态传承平台"
     VERSION: str = "1.0.0"
     DESCRIPTION: str = "AI + AR 驱动的苗绣蜡染非遗数字化平台后端 API"
 
@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 天
 
+    # ComfyUI
+    COMFYUI_URL: str = "http://localhost:8188"
+    COMFYUI_ENABLED: bool = True
+    COMFYUI_CHECKPOINT: str = "sd_xl_base_1.0.safetensors"
+    COMFYUI_LORA: str = "miaoxiu-v1.safetensors"
+    COMFYUI_LORA_STRENGTH: float = 0.8
     # Stable Diffusion
     SD_API_URL: str = "http://localhost:7860"
     SD_ENABLED: bool = False  # 默认关闭，使用模拟生成

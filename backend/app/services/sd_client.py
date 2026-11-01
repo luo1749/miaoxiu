@@ -107,6 +107,212 @@ def _absolute_url(path_or_url: str) -> str:
     return base + (path_or_url if path_or_url.startswith("/") else "/" + path_or_url)
 
 
+def _comfyui_workflow(
+    prompt: str,
+    negative: str,
+    seed: int,
+    width: int,
+    height: int,
+    checkpoint: str,
+    lora: str,
+    lora_strength: float,
+    image_name: str | None = None,
+    denoise: float = 0.55,
+):
+    """构造 ComfyUI 文生图 / 图生图工作流 JSON"""
+    workflow = {
+        "1": {
+            "inputs": {"ckpt_name": checkpoint},
+            "class_type": "CheckpointLoaderSimple",
+        },
+        "2": {
+            "inputs": {
+                "lora_name": lora,
+                "strength_model": lora_strength,
+                "strength_clip": lora_strength,
+                "model": ["1", 0],
+                "clip": ["1", 1],
+            },
+            "class_type": "LoraLoader",
+        },
+        "3": {
+            "inputs": {"text": prompt, "clip": ["2", 1]},
+            "class_type": "CLIPTextEncode",
+        },
+        "4": {
+            "inputs": {"text": negative, "clip": ["2", 1]},
+            "class_type": "CLIPTextEncode",
+        },
+        "6": {
+            "inputs": {
+                "seed": seed,
+                "steps": 25,
+                "cfg": 7.0,
+                "sampler_name": "dpmpp_2m",
+                "scheduler": "karras",
+                "denoise": 1.0 if image_name is None else denoise,
+                "model": ["2", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["5", 0] if image_name is None else ["9", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "7": {
+            "inputs": {"samples": ["6", 0], "vae": ["1", 2]},
+            "class_type": "VAEDecode",
+        },
+        "8": {
+            "inputs": {"filename_prefix": "miaoxiu", "images": ["7", 0]},
+            "class_type": "SaveImage",
+        },
+    }
+    if image_name is None:
+        workflow["5"] = {
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+            "class_type": "EmptyLatentImage",
+        }
+    else:
+        workflow["5"] = {
+            "inputs": {"image": image_name},
+            "class_type": "LoadImage",
+        }
+        workflow["9"] = {
+            "inputs": {"pixels": ["5", 0], "vae": ["1", 2]},
+            "class_type": "VAEEncode",
+        }
+    return workflow
+
+
+async def _comfyui_check_reachable(url: str) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{url}/system_stats")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+async def _comfyui_upload_image(url: str, image_path: Path) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        with image_path.open("rb") as f:
+            files = {"image": (image_path.name, f, "image/png")}
+            data = {"type": "input", "overwrite": "true"}
+            resp = await client.post(f"{url}/upload/image", data=data, files=files)
+        resp.raise_for_status()
+        return resp.json()["name"]
+
+
+async def _comfyui_queue_prompt(url: str, workflow: dict) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{url}/prompt",
+            json={"prompt": workflow, "client_id": uuid.uuid4().hex},
+        )
+        resp.raise_for_status()
+        return resp.json()["prompt_id"]
+
+
+async def _comfyui_wait_for_result(
+    url: str, prompt_id: str, timeout: float = 300.0
+) -> str:
+    """轮询 ComfyUI history，返回输出图片文件名"""
+    import asyncio
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            resp = await client.get(f"{url}/history/{prompt_id}")
+            resp.raise_for_status()
+            history = resp.json()
+            entry = history.get(prompt_id)
+            if entry and entry.get("outputs"):
+                outputs = entry["outputs"]
+                for node_id, node_outputs in outputs.items():
+                    images = node_outputs.get("images", [])
+                    if images:
+                        return images[0]["filename"]
+            await asyncio.sleep(1.0)
+    raise TimeoutError("ComfyUI 生成超时")
+
+
+async def _comfyui_fetch_image(url: str, filename: str) -> bytes:
+    """通过 ComfyUI /view 接口下载输出图片"""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(
+            f"{url}/view",
+            params={"filename": filename, "type": "output", "subfolder": ""},
+        )
+        resp.raise_for_status()
+        return resp.content
+
+
+async def _generate_with_comfyui(
+    prompt: str,
+    style: str,
+    colors: List[str],
+    batch_size: int,
+    image_url: str | None,
+    width: int,
+    height: int,
+    upload_dir: str,
+) -> List[str]:
+    """调用本地 ComfyUI + LoRA 生成纹样；失败时回退到 Pollinations"""
+    settings = get_settings()
+    url = settings.COMFYUI_URL
+    if not await _comfyui_check_reachable(url):
+        raise ConnectionError(f"ComfyUI 不可达: {url}")
+
+    reference_colors: List[str] = []
+    if image_url:
+        reference_colors = await pattern_generator._extract_reference_colors(image_url, upload_dir, n=3)
+
+    final_prompt = build_prompt(prompt, style, colors, reference_colors)
+    negative = build_negative_prompt()
+    results: List[str] = []
+    base_seed = uuid.uuid4().int % 10_000_000
+
+    image_name: str | None = None
+    if image_url:
+        if image_url.startswith("/uploads/"):
+            ref_path = Path(upload_dir) / image_url.replace("/uploads/", "")
+        else:
+            ref_path = Path(upload_dir) / f"comfy_ref_{uuid.uuid4().hex}.png"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(_absolute_url(image_url))
+                resp.raise_for_status()
+            ref_path.write_bytes(resp.content)
+        if ref_path.exists():
+            image_name = await _comfyui_upload_image(url, ref_path)
+
+    for i in range(batch_size):
+        seed = base_seed + i
+        try:
+            workflow = _comfyui_workflow(
+                prompt=final_prompt,
+                negative=negative,
+                seed=seed,
+                width=width,
+                height=height,
+                checkpoint=settings.COMFYUI_CHECKPOINT,
+                lora=settings.COMFYUI_LORA,
+                lora_strength=settings.COMFYUI_LORA_STRENGTH,
+                image_name=image_name,
+            )
+            prompt_id = await _comfyui_queue_prompt(url, workflow)
+            filename = await _comfyui_wait_for_result(url, prompt_id)
+            img_data = await _comfyui_fetch_image(url, filename)
+            local_url = _save_generated_image(img_data, upload_dir)
+            results.append(local_url)
+        except Exception as e:
+            print(f"[ComfyUI] 第 {i+1} 张生成失败: {e}，回退到 Pollinations")
+            extra = await _generate_with_pollinations(
+                prompt, style, colors, 1, image_url, width, height, upload_dir
+            )
+            results.extend(extra)
+
+    return results[:batch_size]
+
+
 async def _generate_with_pollinations(
     prompt: str,
     style: str,
@@ -232,8 +438,16 @@ async def generate_images(
     width: int = 1024,
     height: int = 1024,
 ) -> List[str]:
-    """生成纹样图片入口。"""
+    """生成纹样图片入口：优先 ComfyUI + LoRA，其次 SD WebUI，最后 Pollinations。"""
     settings = get_settings()
+
+    if settings.COMFYUI_ENABLED:
+        try:
+            return await _generate_with_comfyui(
+                prompt, style, colors, batch_size, image_url, width, height, settings.UPLOAD_DIR
+            )
+        except Exception as e:
+            print(f"[ComfyUI] 不可用或失败: {e}")
 
     if settings.SD_ENABLED:
         return await _generate_with_sd_webui(
